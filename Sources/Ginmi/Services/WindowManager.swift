@@ -128,6 +128,7 @@ final class WindowManager: WindowManaging {
             }
             return keep
         }
+        dedupedWindows = filterGenericUntitledCompanions(dedupedWindows)
 
         if debugWindowList {
             debugLogWindows(dedupedWindows)
@@ -307,6 +308,32 @@ final class WindowManager: WindowManaging {
         return true
     }
 
+    func filterGenericUntitledCompanions(_ windows: [WindowInfo]) -> [WindowInfo] {
+        let groupedByPID = Dictionary(grouping: windows, by: \.ownerPID)
+        var kept: [WindowInfo] = []
+        kept.reserveCapacity(windows.count)
+
+        for window in windows {
+            let siblings = groupedByPID[window.ownerPID] ?? []
+            let hasTitledSibling = siblings.contains { $0.id != window.id && !$0.title.isEmpty }
+            let shouldDrop = window.title.isEmpty && hasTitledSibling
+
+            if shouldDrop {
+                if debugWindowFiltering || debugWindowList {
+                    print(
+                        "DROP_COMPANION id=\(window.id) pid=\(window.ownerPID) bundle=\(window.ownerBundleID) app=\(window.ownerName) " +
+                            "title=\"\(window.title)\" bounds=\(window.boundsSignature) reason=untitled-companion-to-titled-window"
+                    )
+                }
+                continue
+            }
+
+            kept.append(window)
+        }
+
+        return kept
+    }
+
     private func debugDrop(windowID: Int, ownerName: String, reason: String, info: [String: Any]) {
         guard debugWindowFiltering else { return }
         let pid = info[kCGWindowOwnerPID as String] as? Int ?? -1
@@ -320,7 +347,7 @@ final class WindowManager: WindowManaging {
         for window in windows {
             print(
                 "id=\(window.id) pid=\(window.ownerPID) bundle=\(window.ownerBundleID) app=\(window.ownerName) " +
-                    "title=\"\(window.title)\" bounds=\(window.boundsSignature) onScreen=\(window.isOnScreen) alpha=\(window.alpha)"
+                    "title=\"\(window.title)\" emptyTitle=\(window.title.isEmpty) bounds=\(window.boundsSignature) onScreen=\(window.isOnScreen) alpha=\(window.alpha)"
             )
         }
 

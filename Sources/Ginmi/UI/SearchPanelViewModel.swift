@@ -150,7 +150,9 @@ final class SearchPanelViewModel: ObservableObject {
         selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
 
         guard debugCommandTab else { return }
-        let titles = results.map { "\($0.window.ownerName) :: \($0.window.displayTitle)" }
+        let titles = results.map {
+            "id=\($0.window.id) pid=\($0.window.ownerPID) \($0.window.ownerName) :: \($0.window.displayTitle) bounds=\($0.window.boundsSignature) emptyTitle=\($0.window.title.isEmpty)"
+        }
         print("GINMI_COMMAND_TAB query=\"\(query)\" matches=\(titles)")
     }
 
