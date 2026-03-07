@@ -2,7 +2,6 @@ import KeyboardShortcuts
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("fastSearchModifier") private var fastSearchModifier = FastSearchModifier.fn.rawValue
     @AppStorage("recencyWeightEnabled") private var recencyWeightEnabled = true
 
     let shortcutsStore: SearchShortcutStore
@@ -13,12 +12,7 @@ struct SettingsView: View {
                 KeyboardShortcuts.Recorder("Show search panel", name: .openSearch)
             }
 
-            Section("Fast Search") {
-                Picker("Hold modifier", selection: $fastSearchModifier) {
-                    ForEach(FastSearchModifier.allCases) { modifier in
-                        Text(modifier.displayName).tag(modifier.rawValue)
-                    }
-                }
+            Section("Behavior") {
                 Toggle("Use recency weighting", isOn: $recencyWeightEnabled)
             }
 
