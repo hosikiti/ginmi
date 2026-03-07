@@ -54,6 +54,9 @@ final class SearchPanelViewModel: ObservableObject {
             query = ""
         }
         refreshWindows()
+        if presentationMode == .commandTab, let initiallySelectedWindowID {
+            prioritizeWindow(withID: initiallySelectedWindowID)
+        }
         if presentationMode == .commandTab {
             runCommandTabSearch()
         } else {
@@ -85,11 +88,17 @@ final class SearchPanelViewModel: ObservableObject {
     func appendQuery(_ text: String) {
         guard !text.isEmpty else { return }
         query.append(text)
+        if presentationMode == .commandTab {
+            selectedIndex = 0
+        }
     }
 
     func deleteLastQueryCharacter() {
         guard !query.isEmpty else { return }
         query.removeLast()
+        if presentationMode == .commandTab {
+            selectedIndex = 0
+        }
     }
 
     func hasSelection() -> Bool {
@@ -120,6 +129,11 @@ final class SearchPanelViewModel: ObservableObject {
 
     func icon(for rankedWindow: RankedWindow) -> NSImage {
         windowManager.icon(for: rankedWindow.window)
+    }
+
+    func selectedWindow() -> WindowInfo? {
+        guard results.indices.contains(selectedIndex) else { return nil }
+        return results[selectedIndex].window
     }
 
     private func scheduleSearch() {
@@ -194,5 +208,11 @@ final class SearchPanelViewModel: ObservableObject {
                 }
                 return lhs.score < rhs.score
             }
+    }
+
+    private func prioritizeWindow(withID windowID: Int) {
+        guard let index = allWindows.firstIndex(where: { $0.id == windowID }) else { return }
+        let current = allWindows.remove(at: index)
+        allWindows.insert(current, at: 0)
     }
 }

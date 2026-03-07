@@ -9,6 +9,7 @@ final class SearchPanelController {
     private var localMonitor: Any?
     private var fastSearchActive = false
     private var commandTabActive = false
+    private let debugCommandTab = ProcessInfo.processInfo.environment["GINMI_DEBUG_COMMAND_TAB"] == "1"
 
     init(viewModel: SearchPanelViewModel, windowManager: any WindowManaging) {
         self.viewModel = viewModel
@@ -49,6 +50,16 @@ final class SearchPanelController {
         commandTabActive = true
         let currentWindowID = windowManager.currentFrontmostWindowID()
         viewModel.show(resetQuery: true, mode: .commandTab, initiallySelectedWindowID: currentWindowID)
+        if debugCommandTab {
+            if let selected = viewModel.selectedWindow() {
+                print(
+                    "GINMI_COMMAND_TAB activeWindow id=\(selected.id) pid=\(selected.ownerPID) " +
+                        "app=\(selected.ownerName) title=\"\(selected.displayTitle)\" bounds=\(selected.boundsSignature)"
+                )
+            } else {
+                print("GINMI_COMMAND_TAB activeWindow unresolved currentWindowID=\(currentWindowID.map(String.init) ?? "nil")")
+            }
+        }
 
         position(panel)
         NSApp.activate(ignoringOtherApps: true)

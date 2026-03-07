@@ -145,28 +145,40 @@ final class WindowManager: WindowManaging {
     }
 
     func currentFrontmostWindowID() -> Int? {
-        guard
-            let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
-        else {
-            return nil
+        guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
+            return fallbackFrontmostWindowID()
         }
 
-        for info in infoList {
-            guard
-                let windowID = info[kCGWindowNumber as String] as? Int,
-                let ownerPID = info[kCGWindowOwnerPID as String] as? Int,
-                let ownerName = info[kCGWindowOwnerName as String] as? String
-            else {
-                continue
-            }
-
-            guard ownerName != "Window Server", ownerName != "Dock" else { continue }
-            let pid = pid_t(ownerPID)
-            let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "unknown"
-            guard bundleID != Bundle.main.bundleIdentifier else { continue }
-            return windowID
+        let pid = frontmostApp.processIdentifier
+        guard pid != ProcessInfo.processInfo.processIdentifier else {
+            return fallbackFrontmostWindowID()
         }
-        return nil
+
+        let appElement = AXUIElementCreateApplication(pid)
+        let focusedWindow = copyAXWindow(
+            attribute: kAXFocusedWindowAttribute as CFString,
+            from: appElement
+        ) ?? copyAXWindow(
+            attribute: kAXMainWindowAttribute as CFString,
+            from: appElement
+        )
+
+        let focusedTitle = focusedWindow.flatMap { copyAXString(attribute: kAXTitleAttribute as CFString, element: $0) }?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let focusedBounds = focusedWindow.flatMap { copyAXRect(element: $0) }
+
+        if debugWindowFiltering || debugWindowList {
+            print(
+                "FRONTMOST_APP pid=\(pid) bundle=\(frontmostApp.bundleIdentifier ?? "unknown") " +
+                    "title=\"\(focusedTitle ?? "")\" bounds=\(focusedBounds.map(boundsSignature(from:)) ?? "unknown")"
+            )
+        }
+
+        if let matched = matchFrontmostWindowID(pid: pid, title: focusedTitle, bounds: focusedBounds) {
+            return matched
+        }
+
+        return fallbackFrontmostWindowID(preferredPID: pid)
     }
 
     @discardableResult
@@ -224,6 +236,13 @@ final class WindowManager: WindowManaging {
             return nil
         }
         return windows
+    }
+
+    private func copyAXWindow(attribute: CFString, from appElement: AXUIElement) -> AXUIElement? {
+        var value: AnyObject?
+        let result = AXUIElementCopyAttributeValue(appElement, attribute, &value)
+        guard result == .success, let window = value else { return nil }
+        return unsafeDowncast(window, to: AXUIElement.self)
     }
 
     private func copyAXString(attribute: CFString, element: AXUIElement) -> String? {
@@ -285,6 +304,89 @@ final class WindowManager: WindowManaging {
         let w = Int(rect.size.width.rounded())
         let h = Int(rect.size.height.rounded())
         return "\(x),\(y),\(w),\(h)"
+    }
+
+    private func matchFrontmostWindowID(pid: pid_t, title: String?, bounds: CGRect?) -> Int? {
+        guard
+            let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else {
+            return nil
+        }
+
+        let candidates = infoList.compactMap { info -> (id: Int, title: String, bounds: CGRect)? in
+            guard
+                let windowID = info[kCGWindowNumber as String] as? Int,
+                let ownerPID = info[kCGWindowOwnerPID as String] as? Int,
+                ownerPID == pid,
+                let layer = info[kCGWindowLayer as String] as? Int,
+                layer == 0,
+                let cgBounds = boundsRect(from: info[kCGWindowBounds as String])
+            else {
+                return nil
+            }
+
+            let cgTitle = (info[kCGWindowName as String] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return (windowID, cgTitle, cgBounds)
+        }
+
+        if let title {
+            if let exactTitleAndBounds = candidates.first(where: { candidate in
+                candidate.title == title && bounds.map { rectsRoughlyEqual(candidate.bounds, $0) } != false
+            }) {
+                return exactTitleAndBounds.id
+            }
+
+            if let exactTitle = candidates.first(where: { $0.title == title }) {
+                return exactTitle.id
+            }
+        }
+
+        if let bounds, let exactBounds = candidates.first(where: { rectsRoughlyEqual($0.bounds, bounds) }) {
+            return exactBounds.id
+        }
+
+        return candidates.first?.id
+    }
+
+    private func fallbackFrontmostWindowID(preferredPID: pid_t? = nil) -> Int? {
+        guard
+            let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else {
+            return nil
+        }
+
+        if let preferredPID {
+            for info in infoList {
+                guard
+                    let windowID = info[kCGWindowNumber as String] as? Int,
+                    let ownerPID = info[kCGWindowOwnerPID as String] as? Int,
+                    ownerPID == preferredPID,
+                    let layer = info[kCGWindowLayer as String] as? Int,
+                    layer == 0
+                else {
+                    continue
+                }
+                return windowID
+            }
+        }
+
+        for info in infoList {
+            guard
+                let windowID = info[kCGWindowNumber as String] as? Int,
+                let ownerPID = info[kCGWindowOwnerPID as String] as? Int,
+                let ownerName = info[kCGWindowOwnerName as String] as? String
+            else {
+                continue
+            }
+
+            guard ownerName != "Window Server", ownerName != "Dock" else { continue }
+            let pid = pid_t(ownerPID)
+            let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "unknown"
+            guard bundleID != Bundle.main.bundleIdentifier else { continue }
+            return windowID
+        }
+
+        return nil
     }
 
     private func shouldKeepWindow(_ window: WindowInfo) -> Bool {

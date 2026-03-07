@@ -29,6 +29,26 @@ final class SearchPanelViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.results.allSatisfy { "\($0.window.ownerName) \($0.window.displayTitle)".lowercased().contains("arc") })
     }
 
+    func testCommandTabShowPrioritizesAndSelectsCurrentWindow() {
+        let windows = [
+            makeWindow(id: 1, app: "Arc", title: "Mail"),
+            makeWindow(id: 2, app: "Ghostty", title: "Terminal"),
+            makeWindow(id: 3, app: "Code", title: "Ginmi")
+        ]
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        let viewModel = SearchPanelViewModel(
+            windowManager: FakeWindowManager(windows: windows),
+            searcher: FuzzySearcher(),
+            shortcutsStore: SearchShortcutStore(defaults: defaults),
+            defaults: defaults
+        )
+
+        viewModel.show(resetQuery: true, mode: .commandTab, initiallySelectedWindowID: 2)
+
+        XCTAssertEqual(viewModel.results.map(\.window.id), [2, 1, 3])
+        XCTAssertEqual(viewModel.selectedIndex, 0)
+    }
+
     private func makeWindow(id: Int, app: String, title: String) -> WindowInfo {
         WindowInfo(
             id: id,
