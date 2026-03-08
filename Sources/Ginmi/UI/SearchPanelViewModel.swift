@@ -34,6 +34,7 @@ final class SearchPanelViewModel: ObservableObject {
     private var searchDebounceTask: Task<Void, Never>?
     private var allWindows: [WindowInfo] = []
     private var presentationMode: PresentationMode = .standard
+    private var initialWindowID: Int?
     private let debugCommandTab = ProcessInfo.processInfo.environment["GINMI_DEBUG_COMMAND_TAB"] == "1"
 
     init(
@@ -52,13 +53,14 @@ final class SearchPanelViewModel: ObservableObject {
 
     func show(resetQuery: Bool, mode: PresentationMode, initiallySelectedWindowID: Int? = nil) {
         presentationMode = mode
+        initialWindowID = initiallySelectedWindowID
         isVisible = true
         if resetQuery {
             query = ""
         }
         refreshWindows()
-        if presentationMode == .commandTab, let initiallySelectedWindowID {
-            prioritizeWindow(withID: initiallySelectedWindowID)
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            orderWindowsForInitialDisplay(prioritizing: initiallySelectedWindowID)
         }
         if presentationMode == .commandTab {
             runCommandTabSearch()
@@ -168,6 +170,13 @@ final class SearchPanelViewModel: ObservableObject {
     }
 
     private func runSearch() {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedQuery.isEmpty {
+            orderWindowsForInitialDisplay(prioritizing: initialWindowID)
+            results = allWindows.map { SearchResultItem(kind: .window($0), score: 0) }
+            selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
+            return
+        }
         let recencyWeightEnabled = defaults.object(forKey: "recencyWeightEnabled") as? Bool ?? true
         let preferredWindowID = shortcutsStore.preferredWindowID(for: query)
         let rankedWindows = searcher.rank(
@@ -185,6 +194,9 @@ final class SearchPanelViewModel: ObservableObject {
     }
 
     private func runCommandTabSearch() {
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            orderWindowsForInitialDisplay(prioritizing: initialWindowID)
+        }
         results = rankForCommandTab(query: query)
         selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
 
@@ -242,10 +254,26 @@ final class SearchPanelViewModel: ObservableObject {
         return windowResults + appResults
     }
 
-    private func prioritizeWindow(withID windowID: Int) {
-        guard let index = allWindows.firstIndex(where: { $0.id == windowID }) else { return }
-        let current = allWindows.remove(at: index)
-        allWindows.insert(current, at: 0)
+    private func orderWindowsForInitialDisplay(prioritizing windowID: Int?) {
+        let indexedWindows = Array(allWindows.enumerated())
+        let prioritizedWindow = indexedWindows.first(where: { $0.element.id == windowID })?.element
+        let remainingWindows = indexedWindows
+            .filter { $0.element.id != windowID }
+            .sorted { lhs, rhs in
+                let lhsRecency = shortcutsStore.lastUsed(for: lhs.element.identifier)
+                let rhsRecency = shortcutsStore.lastUsed(for: rhs.element.identifier)
+                if lhsRecency == rhsRecency {
+                    return lhs.offset < rhs.offset
+                }
+                return lhsRecency > rhsRecency
+            }
+            .map(\.element)
+
+        if let prioritizedWindow {
+            allWindows = [prioritizedWindow] + remainingWindows
+        } else {
+            allWindows = remainingWindows
+        }
     }
 
     private func appResults(query: String, strictContains: Bool) -> [SearchResultItem] {

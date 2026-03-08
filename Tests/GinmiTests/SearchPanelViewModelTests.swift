@@ -54,6 +54,64 @@ final class SearchPanelViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedIndex, 0)
     }
 
+    func testCommandTabShowOrdersRemainingWindowsByLastUsedDescending() {
+        let windows = [
+            makeWindow(id: 1, app: "Arc", title: "Mail"),
+            makeWindow(id: 2, app: "Ghostty", title: "Terminal"),
+            makeWindow(id: 3, app: "Code", title: "Ginmi"),
+            makeWindow(id: 4, app: "Cursor", title: "backend-revamp")
+        ]
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        defaults.set(
+            [
+                windows[1].identifier: 10,
+                windows[2].identifier: 30,
+                windows[3].identifier: 20
+            ],
+            forKey: "windowLastUsed"
+        )
+        let viewModel = SearchPanelViewModel(
+            windowManager: FakeWindowManager(windows: windows),
+            installedAppManager: FakeInstalledAppManager(apps: []),
+            searcher: FuzzySearcher(),
+            shortcutsStore: SearchShortcutStore(defaults: defaults),
+            defaults: defaults
+        )
+
+        viewModel.show(resetQuery: true, mode: .commandTab, initiallySelectedWindowID: 1)
+
+        XCTAssertEqual(viewModel.results.compactMap(windowID), [1, 3, 4, 2])
+        XCTAssertEqual(viewModel.selectedIndex, 0)
+    }
+
+    func testStandardShowOrdersEmptyQueryByLastUsedDescendingAfterCurrentWindow() {
+        let windows = [
+            makeWindow(id: 1, app: "Arc", title: "Mail"),
+            makeWindow(id: 2, app: "Ghostty", title: "Terminal"),
+            makeWindow(id: 3, app: "Code", title: "Ginmi")
+        ]
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        defaults.set(
+            [
+                windows[1].identifier: 10,
+                windows[2].identifier: 20
+            ],
+            forKey: "windowLastUsed"
+        )
+        let viewModel = SearchPanelViewModel(
+            windowManager: FakeWindowManager(windows: windows),
+            installedAppManager: FakeInstalledAppManager(apps: []),
+            searcher: FuzzySearcher(),
+            shortcutsStore: SearchShortcutStore(defaults: defaults),
+            defaults: defaults
+        )
+
+        viewModel.show(resetQuery: true, mode: .standard, initiallySelectedWindowID: 1)
+
+        XCTAssertEqual(viewModel.results.compactMap(windowID), [1, 3, 2])
+        XCTAssertEqual(viewModel.selectedIndex, 0)
+    }
+
     func testFallsBackToInstalledAppsWhenNoWindowsMatchAndSettingEnabled() {
         let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
         defaults.set(true, forKey: "searchInstalledAppsFallbackEnabled")

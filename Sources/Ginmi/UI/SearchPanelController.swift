@@ -35,7 +35,8 @@ final class SearchPanelController {
         let panel = panel ?? makePanel()
         self.panel = panel
         self.fastSearchActive = fastSearchMode
-        viewModel.show(resetQuery: !fastSearchMode, mode: .standard)
+        let currentWindowID = windowManager.currentFrontmostWindowID()
+        viewModel.show(resetQuery: !fastSearchMode, mode: .standard, initiallySelectedWindowID: currentWindowID)
 
         position(panel)
         NSApp.activate(ignoringOtherApps: true)
