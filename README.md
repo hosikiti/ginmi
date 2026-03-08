@@ -5,9 +5,10 @@ Ginmi is a lightweight macOS window switcher focused on the Contexts-style fuzzy
 ## Features
 
 - Global hotkey panel (`Control + Space` by default, configurable)
+- `Cmd + Tab` replacement flow for window switching
 - Fuzzy search over app name + window title (Fuse-based ranking)
 - Learned shortcuts: query -> preferred window persistence in `UserDefaults`
-- Fast Search mode: hold a modifier (Fn by default), type, release to switch
+- Optional installed-app results appended after matching running windows
 - Accessibility-backed window focusing for per-window activation
 
 ## Requirements
@@ -28,6 +29,23 @@ To open in Xcode:
 open Package.swift
 ```
 
+## Build a DMG
+
+```bash
+bash scripts/build-dmg.sh
+```
+
+Outputs:
+
+- `dist/Ginmi.app`
+- `dist/Ginmi-0.1.0.dmg`
+
+Optional overrides:
+
+```bash
+VERSION=0.1.1 BUNDLE_ID=com.example.ginmi bash scripts/build-dmg.sh
+```
+
 ## Permissions
 
 Ginmi requires **Accessibility** permission to enumerate and raise windows.
@@ -43,8 +61,8 @@ On first run, Ginmi prompts for access. You can also enable manually:
 Open the app settings and configure:
 
 - Main global hotkey
-- Fast Search hold modifier
 - Recency weighting toggle
+- Include installed apps in search results
 - Reset learned shortcuts
 
 ## Architecture
@@ -58,7 +76,6 @@ Open the app settings and configure:
 
 ## Notes
 
-- Fast Search with Fn depends on hardware/keyboard behavior for `flagsChanged` events.
 - AX window matching uses title fallback where direct IDs are unavailable.
 
 ## License
