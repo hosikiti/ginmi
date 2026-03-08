@@ -19,7 +19,7 @@ final class SearchPanelViewModel: ObservableObject {
             }
         }
     }
-    @Published private(set) var results: [RankedWindow] = []
+    @Published private(set) var results: [SearchResultItem] = []
     @Published var selectedIndex = 0
     @Published private(set) var isVisible = false
 
@@ -27,6 +27,7 @@ final class SearchPanelViewModel: ObservableObject {
     var onCancel: (() -> Void)?
 
     private let windowManager: any WindowManaging
+    private let installedAppManager: any InstalledAppManaging
     private let searcher: FuzzySearcher
     private let shortcutsStore: SearchShortcutStore
     private let defaults: UserDefaults
@@ -37,11 +38,13 @@ final class SearchPanelViewModel: ObservableObject {
 
     init(
         windowManager: any WindowManaging,
+        installedAppManager: any InstalledAppManaging,
         searcher: FuzzySearcher,
         shortcutsStore: SearchShortcutStore,
         defaults: UserDefaults = .standard
     ) {
         self.windowManager = windowManager
+        self.installedAppManager = installedAppManager
         self.searcher = searcher
         self.shortcutsStore = shortcutsStore
         self.defaults = defaults
@@ -106,7 +109,12 @@ final class SearchPanelViewModel: ObservableObject {
     }
 
     func selectWindow(withID windowID: Int) {
-        guard let index = results.firstIndex(where: { $0.window.id == windowID }) else {
+        guard let index = results.firstIndex(where: {
+            if case let .window(window) = $0.kind {
+                return window.id == windowID
+            }
+            return false
+        }) else {
             selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
             return
         }
@@ -115,25 +123,39 @@ final class SearchPanelViewModel: ObservableObject {
 
     func commitSelection() {
         guard results.indices.contains(selectedIndex) else { return }
-        let selected = results[selectedIndex].window
+        let selected = results[selectedIndex]
 
-        _ = windowManager.activate(window: selected)
-        shortcutsStore.remember(query: query, windowIdentifier: selected.identifier)
-        shortcutsStore.incrementUsage(for: selected.identifier)
-        onCommitSelection?(selected, query)
+        switch selected.kind {
+        case let .window(window):
+            _ = windowManager.activate(window: window)
+            shortcutsStore.remember(query: query, windowIdentifier: window.identifier)
+            shortcutsStore.incrementUsage(for: window.identifier)
+            onCommitSelection?(window, query)
+        case let .app(app):
+            _ = installedAppManager.launch(app: app)
+            onCancel?()
+        }
     }
 
     func cancel() {
         onCancel?()
     }
 
-    func icon(for rankedWindow: RankedWindow) -> NSImage {
-        windowManager.icon(for: rankedWindow.window)
+    func icon(for result: SearchResultItem) -> NSImage {
+        switch result.kind {
+        case let .window(window):
+            return windowManager.icon(for: window)
+        case let .app(app):
+            return installedAppManager.icon(for: app)
+        }
     }
 
     func selectedWindow() -> WindowInfo? {
         guard results.indices.contains(selectedIndex) else { return nil }
-        return results[selectedIndex].window
+        if case let .window(window) = results[selectedIndex].kind {
+            return window
+        }
+        return nil
     }
 
     private func scheduleSearch() {
@@ -148,7 +170,7 @@ final class SearchPanelViewModel: ObservableObject {
     private func runSearch() {
         let recencyWeightEnabled = defaults.object(forKey: "recencyWeightEnabled") as? Bool ?? true
         let preferredWindowID = shortcutsStore.preferredWindowID(for: query)
-        results = searcher.rank(
+        let rankedWindows = searcher.rank(
             windows: allWindows,
             query: query,
             preferredWindowID: preferredWindowID,
@@ -156,6 +178,9 @@ final class SearchPanelViewModel: ObservableObject {
             recencyProvider: { [shortcutsStore] in shortcutsStore.lastUsed(for: $0) },
             recencyWeightEnabled: recencyWeightEnabled
         )
+        let windowResults = rankedWindows.map { SearchResultItem(kind: .window($0.window), score: $0.score) }
+        let appResults = appResults(query: query, strictContains: false)
+        results = windowResults + appResults
         selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
     }
 
@@ -165,20 +190,25 @@ final class SearchPanelViewModel: ObservableObject {
 
         guard debugCommandTab else { return }
         let titles = results.map {
-            "id=\($0.window.id) pid=\($0.window.ownerPID) \($0.window.ownerName) :: \($0.window.displayTitle) bounds=\($0.window.boundsSignature) emptyTitle=\($0.window.title.isEmpty)"
+            switch $0.kind {
+            case let .window(window):
+                return "id=\(window.id) pid=\(window.ownerPID) \(window.ownerName) :: \(window.displayTitle) bounds=\(window.boundsSignature) emptyTitle=\(window.title.isEmpty)"
+            case let .app(app):
+                return "app=\(app.name) bundle=\(app.bundleIdentifier) path=\(app.url.path)"
+            }
         }
         print("GINMI_COMMAND_TAB query=\"\(query)\" matches=\(titles)")
     }
 
-    private func rankForCommandTab(query: String) -> [RankedWindow] {
+    private func rankForCommandTab(query: String) -> [SearchResultItem] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedQuery.isEmpty else {
-            return allWindows.map { RankedWindow(window: $0, score: 0) }
+            return allWindows.map { SearchResultItem(kind: .window($0), score: 0) }
         }
 
         let preferredWindowID = shortcutsStore.preferredWindowID(for: query)
-        return allWindows
-            .compactMap { window in
+        let windowResults = allWindows
+            .compactMap { window -> SearchResultItem? in
                 let appName = window.ownerName.lowercased()
                 let title = window.displayTitle.lowercased()
                 let searchable = "\(appName) \(title)"
@@ -200,19 +230,77 @@ final class SearchPanelViewModel: ObservableObject {
                 }
 
                 score -= Double(shortcutsStore.usageCount(for: window.identifier)) * 0.01
-                return RankedWindow(window: window, score: score)
+                return SearchResultItem(kind: .window(window), score: score)
             }
-            .sorted { lhs, rhs in
+            .sorted { (lhs: SearchResultItem, rhs: SearchResultItem) in
                 if lhs.score == rhs.score {
-                    return lhs.window.displayTitle.localizedCaseInsensitiveCompare(rhs.window.displayTitle) == .orderedAscending
+                    return lhs.primaryText.localizedCaseInsensitiveCompare(rhs.primaryText) == .orderedAscending
                 }
                 return lhs.score < rhs.score
             }
+        let appResults = appResults(query: query, strictContains: true)
+        return windowResults + appResults
     }
 
     private func prioritizeWindow(withID windowID: Int) {
         guard let index = allWindows.firstIndex(where: { $0.id == windowID }) else { return }
         let current = allWindows.remove(at: index)
         allWindows.insert(current, at: 0)
+    }
+
+    private func appResults(query: String, strictContains: Bool) -> [SearchResultItem] {
+        let isFallbackEnabled = defaults.object(forKey: "searchInstalledAppsFallbackEnabled") as? Bool ?? true
+        guard isFallbackEnabled else { return [] }
+
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedQuery.isEmpty else { return [] }
+
+        return installedAppManager.installedApps()
+            .compactMap { app -> SearchResultItem? in
+                let searchable = app.name.lowercased()
+                let matches: Bool
+                if strictContains {
+                    matches = searchable.contains(normalizedQuery)
+                } else {
+                    matches = searchable.contains(normalizedQuery) || isSubsequence(normalizedQuery, in: searchable)
+                }
+                guard matches else { return nil }
+
+                var score = 1.0
+                if searchable == normalizedQuery {
+                    score -= 0.6
+                } else if searchable.hasPrefix(normalizedQuery) {
+                    score -= 0.4
+                } else if searchable.contains(normalizedQuery) {
+                    score -= 0.2
+                }
+                return SearchResultItem(kind: .app(app), score: score)
+            }
+            .sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    return lhs.primaryText.localizedCaseInsensitiveCompare(rhs.primaryText) == .orderedAscending
+                }
+                return lhs.score < rhs.score
+            }
+    }
+
+    private func isSubsequence(_ query: String, in text: String) -> Bool {
+        if query.isEmpty { return true }
+        var textIndex = text.startIndex
+        for queryChar in query {
+            var found = false
+            while textIndex < text.endIndex {
+                if text[textIndex] == queryChar {
+                    found = true
+                    text.formIndex(after: &textIndex)
+                    break
+                }
+                text.formIndex(after: &textIndex)
+            }
+            if !found {
+                return false
+            }
+        }
+        return true
     }
 }

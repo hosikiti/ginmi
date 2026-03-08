@@ -20,21 +20,27 @@ struct SearchPanelView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, ranked in
-                            SearchResultRow(
-                                icon: viewModel.icon(for: ranked),
-                                appName: ranked.window.ownerName,
-                                title: ranked.window.displayTitle,
-                                isSelected: index == viewModel.selectedIndex,
-                                isHovered: hoveredIndex == index
-                            )
-                            .contentShape(Rectangle())
-                            .onHover { isHovering in
-                                hoveredIndex = isHovering ? index : (hoveredIndex == index ? nil : hoveredIndex)
-                            }
-                            .onTapGesture {
-                                viewModel.selectedIndex = index
-                                viewModel.commitSelection()
+                        ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
+                            VStack(spacing: 6) {
+                                if shouldShowInstalledAppsSeparator(before: index) {
+                                    SearchResultsSeparator(title: "Installed Applications")
+                                }
+
+                                SearchResultRow(
+                                    icon: viewModel.icon(for: result),
+                                    appName: result.rowAppName,
+                                    title: result.rowTitle,
+                                    isSelected: index == viewModel.selectedIndex,
+                                    isHovered: hoveredIndex == index
+                                )
+                                .contentShape(Rectangle())
+                                .onHover { isHovering in
+                                    hoveredIndex = isHovering ? index : (hoveredIndex == index ? nil : hoveredIndex)
+                                }
+                                .onTapGesture {
+                                    viewModel.selectedIndex = index
+                                    viewModel.commitSelection()
+                                }
                             }
                         }
                     }
@@ -44,12 +50,12 @@ struct SearchPanelView: View {
                 .onChange(of: viewModel.selectedIndex) { _, newIndex in
                     guard viewModel.results.indices.contains(newIndex) else { return }
                     withAnimation(.easeOut(duration: 0.08)) {
-                        proxy.scrollTo(viewModel.results[newIndex].window.id, anchor: .center)
+                        proxy.scrollTo(viewModel.results[newIndex].id, anchor: .center)
                     }
                 }
-                .onChange(of: viewModel.results.map(\.window.id)) { _, _ in
+                .onChange(of: viewModel.results.map(\.id)) { _, _ in
                     guard viewModel.results.indices.contains(viewModel.selectedIndex) else { return }
-                    proxy.scrollTo(viewModel.results[viewModel.selectedIndex].window.id, anchor: .center)
+                    proxy.scrollTo(viewModel.results[viewModel.selectedIndex].id, anchor: .center)
                 }
             }
         }
@@ -62,6 +68,37 @@ struct SearchPanelView: View {
                 queryFocused = true
             }
         }
+    }
+
+    private func shouldShowInstalledAppsSeparator(before index: Int) -> Bool {
+        guard viewModel.results.indices.contains(index) else { return false }
+        guard case .app = viewModel.results[index].kind else { return false }
+        guard index > 0 else { return false }
+        guard case .window = viewModel.results[index - 1].kind else { return false }
+        return true
+    }
+}
+
+private struct SearchResultsSeparator: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(Color.white.opacity(0.14))
+                .frame(height: 1)
+
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.55))
+
+            Rectangle()
+                .fill(Color.white.opacity(0.14))
+                .frame(height: 1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 }
 
@@ -79,7 +116,7 @@ private struct SearchResultRow: View {
                 .interpolation(.high)
                 .frame(width: 18, height: 18)
 
-            Text("\(appName)  \(title)")
+            Text(rowText)
                 .font(.system(size: 14, weight: .medium))
                 .lineLimit(1)
 
@@ -93,5 +130,11 @@ private struct SearchResultRow: View {
                 : (isHovered ? Color.white.opacity(0.08) : .clear)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var rowText: String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return appName }
+        return "\(appName)  \(trimmedTitle)"
     }
 }

@@ -17,9 +17,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let shortcutsStore = SearchShortcutStore()
     private let permissionManager = AccessibilityPermissionManager()
     private let windowManager = WindowManager()
+    private let installedAppManager = InstalledAppManager()
 
     private lazy var viewModel = SearchPanelViewModel(
         windowManager: windowManager,
+        installedAppManager: installedAppManager,
         searcher: FuzzySearcher(),
         shortcutsStore: shortcutsStore
     )
