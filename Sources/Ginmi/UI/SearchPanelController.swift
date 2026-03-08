@@ -83,6 +83,11 @@ final class SearchPanelController {
         viewModel.deleteLastQueryCharacter()
     }
 
+    func quitSelectedCommandTabApp() {
+        guard commandTabActive else { return }
+        viewModel.quitSelectedApp()
+    }
+
     func cancelCommandTabSession() {
         guard commandTabActive else { return }
         hidePanel()

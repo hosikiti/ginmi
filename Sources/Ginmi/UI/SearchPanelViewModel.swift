@@ -28,6 +28,7 @@ final class SearchPanelViewModel: ObservableObject {
 
     private let windowManager: any WindowManaging
     private let installedAppManager: any InstalledAppManaging
+    private let appTerminator: any AppTerminating
     private let searcher: FuzzySearcher
     private let shortcutsStore: SearchShortcutStore
     private let defaults: UserDefaults
@@ -35,17 +36,22 @@ final class SearchPanelViewModel: ObservableObject {
     private var allWindows: [WindowInfo] = []
     private var presentationMode: PresentationMode = .standard
     private var initialWindowID: Int?
+    private var suppressedPIDs = Set<pid_t>()
+    private var suppressedBundleIDs = Set<String>()
+    private var suppressedAppNames = Set<String>()
     private let debugCommandTab = ProcessInfo.processInfo.environment["GINMI_DEBUG_COMMAND_TAB"] == "1"
 
     init(
         windowManager: any WindowManaging,
         installedAppManager: any InstalledAppManaging,
+        appTerminator: any AppTerminating,
         searcher: FuzzySearcher,
         shortcutsStore: SearchShortcutStore,
         defaults: UserDefaults = .standard
     ) {
         self.windowManager = windowManager
         self.installedAppManager = installedAppManager
+        self.appTerminator = appTerminator
         self.searcher = searcher
         self.shortcutsStore = shortcutsStore
         self.defaults = defaults
@@ -54,6 +60,9 @@ final class SearchPanelViewModel: ObservableObject {
     func show(resetQuery: Bool, mode: PresentationMode, initiallySelectedWindowID: Int? = nil) {
         presentationMode = mode
         initialWindowID = initiallySelectedWindowID
+        suppressedPIDs.removeAll()
+        suppressedBundleIDs.removeAll()
+        suppressedAppNames.removeAll()
         isVisible = true
         if resetQuery {
             query = ""
@@ -79,10 +88,13 @@ final class SearchPanelViewModel: ObservableObject {
         query = ""
         results = []
         selectedIndex = 0
+        suppressedPIDs.removeAll()
+        suppressedBundleIDs.removeAll()
+        suppressedAppNames.removeAll()
     }
 
     func refreshWindows() {
-        allWindows = windowManager.fetchAllWindows()
+        allWindows = windowManager.fetchAllWindows().filter { !isSuppressed(window: $0) }
     }
 
     func moveSelection(delta: Int) {
@@ -141,6 +153,34 @@ final class SearchPanelViewModel: ObservableObject {
 
     func cancel() {
         onCancel?()
+    }
+
+    func quitSelectedApp() {
+        guard results.indices.contains(selectedIndex) else { return }
+        let selected = results[selectedIndex]
+
+        let terminated: Bool
+        switch selected.kind {
+        case let .window(window):
+            terminated = appTerminator.terminate(window: window)
+            if terminated {
+                suppress(window: window)
+            }
+        case let .app(app):
+            terminated = appTerminator.terminate(app: app)
+            if terminated {
+                suppress(app: app)
+            }
+        }
+
+        guard terminated else { return }
+
+        refreshWindows()
+        if presentationMode == .commandTab {
+            runCommandTabSearch()
+        } else {
+            runSearch()
+        }
     }
 
     func icon(for result: SearchResultItem) -> NSImage {
@@ -304,12 +344,50 @@ final class SearchPanelViewModel: ObservableObject {
                 }
                 return SearchResultItem(kind: .app(app), score: score)
             }
+            .filter { result in
+                if case let .app(app) = result.kind {
+                    return !isSuppressed(app: app)
+                }
+                return true
+            }
             .sorted { lhs, rhs in
                 if lhs.score == rhs.score {
                     return lhs.primaryText.localizedCaseInsensitiveCompare(rhs.primaryText) == .orderedAscending
                 }
                 return lhs.score < rhs.score
             }
+    }
+
+    private func suppress(window: WindowInfo) {
+        suppressedPIDs.insert(window.ownerPID)
+        if !window.ownerBundleID.isEmpty {
+            suppressedBundleIDs.insert(window.ownerBundleID)
+        }
+        suppressedAppNames.insert(window.ownerName)
+    }
+
+    private func suppress(app: InstalledAppInfo) {
+        if !app.bundleIdentifier.isEmpty {
+            suppressedBundleIDs.insert(app.bundleIdentifier)
+        }
+        suppressedAppNames.insert(app.name)
+    }
+
+    private func isSuppressed(window: WindowInfo) -> Bool {
+        if suppressedPIDs.contains(window.ownerPID) {
+            return true
+        }
+        if !window.ownerBundleID.isEmpty, suppressedBundleIDs.contains(window.ownerBundleID) {
+            return true
+        }
+        return suppressedAppNames.contains(window.ownerName)
+    }
+
+    private func isSuppressed(app: InstalledAppInfo) -> Bool {
+        if !app.bundleIdentifier.isEmpty, suppressedBundleIDs.contains(app.bundleIdentifier) {
+            return true
+        }
+        return suppressedAppNames.contains(app.name)
     }
 
     private func isSubsequence(_ query: String, in text: String) -> Bool {

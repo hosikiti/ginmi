@@ -16,6 +16,7 @@ final class SearchPanelViewModelTests: XCTestCase {
         let viewModel = SearchPanelViewModel(
             windowManager: FakeWindowManager(windows: windows),
             installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: store,
             defaults: defaults
@@ -43,6 +44,7 @@ final class SearchPanelViewModelTests: XCTestCase {
         let viewModel = SearchPanelViewModel(
             windowManager: FakeWindowManager(windows: windows),
             installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: SearchShortcutStore(defaults: defaults),
             defaults: defaults
@@ -73,6 +75,7 @@ final class SearchPanelViewModelTests: XCTestCase {
         let viewModel = SearchPanelViewModel(
             windowManager: FakeWindowManager(windows: windows),
             installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: SearchShortcutStore(defaults: defaults),
             defaults: defaults
@@ -101,6 +104,7 @@ final class SearchPanelViewModelTests: XCTestCase {
         let viewModel = SearchPanelViewModel(
             windowManager: FakeWindowManager(windows: windows),
             installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: SearchShortcutStore(defaults: defaults),
             defaults: defaults
@@ -121,6 +125,7 @@ final class SearchPanelViewModelTests: XCTestCase {
                 InstalledAppInfo(name: "Calendar", bundleIdentifier: "com.apple.Calendar", url: URL(fileURLWithPath: "/Applications/Calendar.app")),
                 InstalledAppInfo(name: "Calculator", bundleIdentifier: "com.apple.Calculator", url: URL(fileURLWithPath: "/Applications/Calculator.app"))
             ]),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: SearchShortcutStore(defaults: defaults),
             defaults: defaults
@@ -146,6 +151,7 @@ final class SearchPanelViewModelTests: XCTestCase {
                 InstalledAppInfo(name: "Arc", bundleIdentifier: "company.thebrowser.Browser", url: URL(fileURLWithPath: "/Applications/Arc.app")),
                 InstalledAppInfo(name: "Archive Utility", bundleIdentifier: "com.apple.archiveutility", url: URL(fileURLWithPath: "/System/Applications/Archive Utility.app"))
             ]),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: SearchShortcutStore(defaults: defaults),
             defaults: defaults
@@ -168,6 +174,7 @@ final class SearchPanelViewModelTests: XCTestCase {
                 InstalledAppInfo(name: "Arc", bundleIdentifier: "company.thebrowser.Browser", url: URL(fileURLWithPath: "/Applications/Arc.app")),
                 InstalledAppInfo(name: "Archive Utility", bundleIdentifier: "com.apple.archiveutility", url: URL(fileURLWithPath: "/System/Applications/Archive Utility.app"))
             ]),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: SearchShortcutStore(defaults: defaults),
             defaults: defaults
@@ -188,6 +195,7 @@ final class SearchPanelViewModelTests: XCTestCase {
             installedAppManager: FakeInstalledAppManager(apps: [
                 InstalledAppInfo(name: "Calendar", bundleIdentifier: "com.apple.Calendar", url: URL(fileURLWithPath: "/Applications/Calendar.app"))
             ]),
+            appTerminator: FakeAppTerminator(),
             searcher: FuzzySearcher(),
             shortcutsStore: SearchShortcutStore(defaults: defaults),
             defaults: defaults
@@ -200,10 +208,67 @@ final class SearchPanelViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.results.isEmpty)
     }
 
-    private func makeWindow(id: Int, app: String, title: String) -> WindowInfo {
+    func testQuitSelectedAppTerminatesSelectedWindowOwnerAndRefreshesResults() {
+        let windowManager = FakeWindowManager(windows: [
+            makeWindow(id: 1, app: "Arc", title: "Mail", pid: 11),
+            makeWindow(id: 2, app: "Ghostty", title: "Terminal", pid: 22)
+        ])
+        let appTerminator = FakeAppTerminator { terminatedPID in
+            windowManager.windows.removeAll { $0.ownerPID == terminatedPID }
+        }
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        let viewModel = SearchPanelViewModel(
+            windowManager: windowManager,
+            installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: appTerminator,
+            searcher: FuzzySearcher(),
+            shortcutsStore: SearchShortcutStore(defaults: defaults),
+            defaults: defaults
+        )
+
+        viewModel.show(resetQuery: true, mode: .commandTab, initiallySelectedWindowID: 1)
+        viewModel.quitSelectedApp()
+
+        XCTAssertEqual(appTerminator.terminatedWindowPIDs, [11])
+        XCTAssertEqual(viewModel.results.compactMap(windowID), [2])
+        XCTAssertEqual(viewModel.selectedIndex, 0)
+    }
+
+    func testQuitSelectedAppSuppressesAppImmediatelyEvenIfWindowSourceStillContainsIt() {
+        let windowManager = FakeWindowManager(windows: [
+            makeWindow(id: 1, app: "Arc", title: "Mail", pid: 11),
+            makeWindow(id: 2, app: "Ghostty", title: "Terminal", pid: 22)
+        ])
+        let appTerminator = FakeAppTerminator()
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        let viewModel = SearchPanelViewModel(
+            windowManager: windowManager,
+            installedAppManager: FakeInstalledAppManager(apps: [
+                InstalledAppInfo(name: "Arc", bundleIdentifier: "test.arc", url: URL(fileURLWithPath: "/Applications/Arc.app"))
+            ]),
+            appTerminator: appTerminator,
+            searcher: FuzzySearcher(),
+            shortcutsStore: SearchShortcutStore(defaults: defaults),
+            defaults: defaults
+        )
+
+        viewModel.show(resetQuery: true, mode: .commandTab, initiallySelectedWindowID: 1)
+        viewModel.quitSelectedApp()
+
+        XCTAssertEqual(appTerminator.terminatedWindowPIDs, [11])
+        XCTAssertEqual(viewModel.results.compactMap(windowID), [2])
+        XCTAssertFalse(viewModel.results.contains { result in
+            if case let .app(app) = result.kind {
+                return app.name == "Arc"
+            }
+            return false
+        })
+    }
+
+    private func makeWindow(id: Int, app: String, title: String, pid: pid_t = 1) -> WindowInfo {
         WindowInfo(
             id: id,
-            ownerPID: 1,
+            ownerPID: pid,
             ownerName: app,
             ownerBundleID: "test.\(app.lowercased())",
             title: title,
@@ -238,7 +303,7 @@ final class SearchPanelViewModelTests: XCTestCase {
 }
 
 private final class FakeWindowManager: WindowManaging {
-    let windows: [WindowInfo]
+    var windows: [WindowInfo]
 
     init(windows: [WindowInfo]) {
         self.windows = windows
@@ -278,5 +343,32 @@ private final class FakeInstalledAppManager: InstalledAppManaging {
 
     func launch(app: InstalledAppInfo) -> Bool {
         true
+    }
+}
+
+private final class FakeAppTerminator: AppTerminating {
+    private let onTerminateWindow: ((pid_t) -> Void)?
+    private let onTerminateApp: ((String) -> Void)?
+    private(set) var terminatedWindowPIDs: [pid_t] = []
+    private(set) var terminatedAppBundleIDs: [String] = []
+
+    init(
+        onTerminateWindow: ((pid_t) -> Void)? = nil,
+        onTerminateApp: ((String) -> Void)? = nil
+    ) {
+        self.onTerminateWindow = onTerminateWindow
+        self.onTerminateApp = onTerminateApp
+    }
+
+    func terminate(window: WindowInfo) -> Bool {
+        terminatedWindowPIDs.append(window.ownerPID)
+        onTerminateWindow?(window.ownerPID)
+        return true
+    }
+
+    func terminate(app: InstalledAppInfo) -> Bool {
+        terminatedAppBundleIDs.append(app.bundleIdentifier)
+        onTerminateApp?(app.bundleIdentifier)
+        return true
     }
 }

@@ -18,10 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let permissionManager = AccessibilityPermissionManager()
     private let windowManager = WindowManager()
     private let installedAppManager = InstalledAppManager()
+    private let appTerminator = AppTerminator()
 
     private lazy var viewModel = SearchPanelViewModel(
         windowManager: windowManager,
         installedAppManager: installedAppManager,
+        appTerminator: appTerminator,
         searcher: FuzzySearcher(),
         shortcutsStore: shortcutsStore
     )
@@ -39,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         },
         onDeleteBackward: { [weak self] in
             self?.panelController.deleteLastCommandTabQueryCharacter()
+        },
+        onQuitSelection: { [weak self] in
+            self?.panelController.quitSelectedCommandTabApp()
         },
         onSessionCancel: { [weak self] in
             self?.panelController.cancelCommandTabSession()

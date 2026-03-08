@@ -7,6 +7,7 @@ final class CommandTabInterceptor {
     private let onCycleSelection: @MainActor (_ forward: Bool) -> Void
     private let onType: @MainActor (_ text: String) -> Void
     private let onDeleteBackward: @MainActor () -> Void
+    private let onQuitSelection: @MainActor () -> Void
     private let onSessionCancel: @MainActor () -> Void
     private let onSessionEnd: @MainActor () -> Void
     private var eventTap: CFMachPort?
@@ -19,6 +20,7 @@ final class CommandTabInterceptor {
         onCycleSelection: @escaping @MainActor (_ forward: Bool) -> Void,
         onType: @escaping @MainActor (_ text: String) -> Void,
         onDeleteBackward: @escaping @MainActor () -> Void,
+        onQuitSelection: @escaping @MainActor () -> Void,
         onSessionCancel: @escaping @MainActor () -> Void,
         onSessionEnd: @escaping @MainActor () -> Void
     ) {
@@ -26,6 +28,7 @@ final class CommandTabInterceptor {
         self.onCycleSelection = onCycleSelection
         self.onType = onType
         self.onDeleteBackward = onDeleteBackward
+        self.onQuitSelection = onQuitSelection
         self.onSessionCancel = onSessionCancel
         self.onSessionEnd = onSessionEnd
     }
@@ -158,6 +161,14 @@ final class CommandTabInterceptor {
             let onDeleteBackward = self.onDeleteBackward
             MainActor.assumeIsolated {
                 onDeleteBackward()
+            }
+            return nil
+        }
+
+        if keyCode == 12, flags.contains(.maskShift) { // Q
+            let onQuitSelection = self.onQuitSelection
+            MainActor.assumeIsolated {
+                onQuitSelection()
             }
             return nil
         }
