@@ -10,11 +10,48 @@ protocol WindowManaging {
     func activate(window: WindowInfo) -> Bool
 }
 
-final class WindowManager: WindowManaging {
+final class WindowManager: WindowManaging, @unchecked Sendable {
     private let debugWindowList = ProcessInfo.processInfo.environment["GINMI_DEBUG_WINDOWS"] == "1"
     private let debugWindowFiltering = ProcessInfo.processInfo.environment["GINMI_DEBUG_WINDOWS_VERBOSE"] == "1"
+    private let windowCacheTTL: TimeInterval = 0.75
+    private let cacheLock = NSLock()
+    private let cacheRefreshQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Ginmi.WindowCacheRefresh"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+    private var cachedWindows: [WindowInfo]?
+    private var cacheDate: Date?
+    private var cacheRefreshInFlight = false
 
     func fetchAllWindows() -> [WindowInfo] {
+        if let cached = cachedWindowSnapshot(requiringFreshness: true) {
+            return cached
+        }
+
+        if let cached = cachedWindowSnapshot(requiringFreshness: false) {
+            scheduleWindowCacheRefresh()
+            return cached
+        }
+
+        let fresh = computeAllWindows()
+        storeWindowCache(fresh)
+        return fresh
+    }
+
+    func prewarmWindowCache() {
+        scheduleWindowCacheRefresh(force: true)
+    }
+
+    func invalidateWindowCache() {
+        cacheLock.lock()
+        cacheDate = nil
+        cacheLock.unlock()
+    }
+
+    private func computeAllWindows() -> [WindowInfo] {
         guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
             return []
         }
@@ -305,6 +342,44 @@ final class WindowManager: WindowManaging {
         let w = Int(rect.size.width.rounded())
         let h = Int(rect.size.height.rounded())
         return "\(x),\(y),\(w),\(h)"
+    }
+
+    private func cachedWindowSnapshot(requiringFreshness: Bool) -> [WindowInfo]? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+
+        guard let cachedWindows else { return nil }
+        if requiringFreshness {
+            guard let cacheDate, Date().timeIntervalSince(cacheDate) < windowCacheTTL else {
+                return nil
+            }
+        }
+        return cachedWindows
+    }
+
+    private func storeWindowCache(_ windows: [WindowInfo]) {
+        cacheLock.lock()
+        cachedWindows = windows
+        cacheDate = Date()
+        cacheRefreshInFlight = false
+        cacheLock.unlock()
+    }
+
+    private func scheduleWindowCacheRefresh(force: Bool = false) {
+        cacheLock.lock()
+        let isFresh = cacheDate.map { Date().timeIntervalSince($0) < windowCacheTTL } ?? false
+        if cacheRefreshInFlight || (!force && isFresh) {
+            cacheLock.unlock()
+            return
+        }
+        cacheRefreshInFlight = true
+        cacheLock.unlock()
+
+        cacheRefreshQueue.addOperation { [weak self] in
+            guard let self else { return }
+            let windows = self.computeAllWindows()
+            self.storeWindowCache(windows)
+        }
     }
 
     private func matchFrontmostWindowID(pid: pid_t, title: String?, bounds: CGRect?) -> Int? {

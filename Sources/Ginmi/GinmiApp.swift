@@ -14,11 +14,17 @@ struct GinmiApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private enum DefaultsKey {
+        static let commandTabQuickSwitchThresholdMs = "commandTabQuickSwitchThresholdMs"
+        static let commandTabQuickSwitchThresholdMigrated = "commandTabQuickSwitchThresholdMigrated"
+    }
+
     let shortcutsStore = SearchShortcutStore()
     private let permissionManager = AccessibilityPermissionManager()
     private let windowManager = WindowManager()
     private let installedAppManager = InstalledAppManager()
     private let appTerminator = AppTerminator()
+    private var workspaceNotificationObservers: [NSObjectProtocol] = []
 
     private lazy var viewModel = SearchPanelViewModel(
         windowManager: windowManager,
@@ -32,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var commandTabInterceptor = CommandTabInterceptor(
         onSessionStart: { [weak self] in
             self?.panelController.beginCommandTabSession()
+        },
+        onQuickSwitch: { [weak self] in
+            self?.panelController.performQuickCommandTabSwitch()
         },
         onCycleSelection: { [weak self] forward in
             self?.panelController.cycleCommandTabSelection(forward: forward)
@@ -64,10 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = notification
         NSApp.setActivationPolicy(.accessory)
         NSApp.windows.forEach { $0.orderOut(nil) }
+        migrateCommandTabQuickSwitchThresholdIfNeeded()
+        windowManager.prewarmWindowCache()
 
         statusBarController.start()
         hotkeyService.start()
         commandTabInterceptor.start()
+        startObservingWorkspaceChanges()
         ensureAccessibilityPermission()
     }
 
@@ -82,6 +94,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Later")
         if alert.runModal() == .alertFirstButtonReturn {
             permissionManager.requestIfNeeded()
+        }
+    }
+
+    private func migrateCommandTabQuickSwitchThresholdIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: DefaultsKey.commandTabQuickSwitchThresholdMigrated) else { return }
+
+        if let configured = defaults.object(forKey: DefaultsKey.commandTabQuickSwitchThresholdMs) as? Int,
+           configured == 100
+        {
+            defaults.set(70, forKey: DefaultsKey.commandTabQuickSwitchThresholdMs)
+        }
+
+        defaults.set(true, forKey: DefaultsKey.commandTabQuickSwitchThresholdMigrated)
+    }
+
+    private func startObservingWorkspaceChanges() {
+        let center = NSWorkspace.shared.notificationCenter
+        let names: [Notification.Name] = [
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didHideApplicationNotification,
+            NSWorkspace.didUnhideApplicationNotification
+        ]
+
+        workspaceNotificationObservers = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.scheduleWindowRefreshAfterWorkspaceChange()
+                }
+            }
+        }
+    }
+
+    private func scheduleWindowRefreshAfterWorkspaceChange() {
+        windowManager.invalidateWindowCache()
+        windowManager.prewarmWindowCache()
+
+        // Launch/terminate notifications can arrive before the app's visible windows settle.
+        for delay in [0.15, 0.45] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.windowManager.prewarmWindowCache()
+                self.panelController.refreshVisibleResults()
+            }
         }
     }
 }

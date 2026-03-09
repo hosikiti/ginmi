@@ -9,7 +9,7 @@ final class SettingsWindowController: NSWindowController {
 
         let window = NSWindow(contentViewController: host)
         window.title = "Ginmi Settings"
-        window.setContentSize(NSSize(width: 440, height: 280))
+        window.setContentSize(NSSize(width: 600, height: 320))
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.center()

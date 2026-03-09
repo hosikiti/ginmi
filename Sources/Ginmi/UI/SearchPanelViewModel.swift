@@ -97,6 +97,62 @@ final class SearchPanelViewModel: ObservableObject {
         allWindows = windowManager.fetchAllWindows().filter { !isSuppressed(window: $0) }
     }
 
+    func refreshVisibleResults(initiallySelectedWindowID: Int? = nil) {
+        guard isVisible else { return }
+
+        let selectedWindowID: Int?
+        let selectedAppIdentity: (bundleID: String, name: String)?
+        if results.indices.contains(selectedIndex) {
+            switch results[selectedIndex].kind {
+            case let .window(window):
+                selectedWindowID = window.id
+                selectedAppIdentity = nil
+            case let .app(app):
+                selectedWindowID = nil
+                selectedAppIdentity = (app.bundleIdentifier, app.name)
+            }
+        } else {
+            selectedWindowID = nil
+            selectedAppIdentity = nil
+        }
+
+        if let initiallySelectedWindowID {
+            initialWindowID = initiallySelectedWindowID
+        }
+
+        refreshWindows()
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            orderWindowsForInitialDisplay(prioritizing: initialWindowID)
+        }
+
+        if presentationMode == .commandTab {
+            runCommandTabSearch()
+        } else {
+            runSearch()
+        }
+
+        if let selectedWindowID {
+            selectWindow(withID: selectedWindowID)
+            return
+        }
+
+        if let selectedAppIdentity,
+           let index = results.firstIndex(where: {
+               if case let .app(app) = $0.kind {
+                   return app.bundleIdentifier == selectedAppIdentity.bundleID && app.name == selectedAppIdentity.name
+               }
+               return false
+           })
+        {
+            selectedIndex = index
+            return
+        }
+
+        if let initiallySelectedWindowID {
+            selectWindow(withID: initiallySelectedWindowID)
+        }
+    }
+
     func moveSelection(delta: Int) {
         guard !results.isEmpty else { return }
         selectedIndex = (selectedIndex + delta + results.count) % results.count
@@ -153,6 +209,23 @@ final class SearchPanelViewModel: ObservableObject {
 
     func cancel() {
         onCancel?()
+    }
+
+    func prepareQuickCommandTabSwitch(initiallySelectedWindowID: Int?) -> Bool {
+        presentationMode = .commandTab
+        initialWindowID = initiallySelectedWindowID
+        query = ""
+        refreshWindows()
+        orderWindowsForInitialDisplay(prioritizing: initiallySelectedWindowID)
+        runCommandTabSearch()
+
+        guard results.count > 1 else {
+            selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
+            return false
+        }
+
+        selectedIndex = 1
+        return true
     }
 
     func quitSelectedApp() {

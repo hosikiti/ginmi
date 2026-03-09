@@ -56,6 +56,36 @@ final class SearchPanelViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedIndex, 0)
     }
 
+    func testPrepareQuickCommandTabSwitchSelectsPreviouslyUsedWindow() {
+        let windows = [
+            makeWindow(id: 1, app: "Arc", title: "Mail"),
+            makeWindow(id: 2, app: "Ghostty", title: "Terminal"),
+            makeWindow(id: 3, app: "Code", title: "Ginmi")
+        ]
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        defaults.set(
+            [
+                windows[1].identifier: 20,
+                windows[2].identifier: 10
+            ],
+            forKey: "windowLastUsed"
+        )
+        let viewModel = SearchPanelViewModel(
+            windowManager: FakeWindowManager(windows: windows),
+            installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: FakeAppTerminator(),
+            searcher: FuzzySearcher(),
+            shortcutsStore: SearchShortcutStore(defaults: defaults),
+            defaults: defaults
+        )
+
+        let canQuickSwitch = viewModel.prepareQuickCommandTabSwitch(initiallySelectedWindowID: 1)
+
+        XCTAssertTrue(canQuickSwitch)
+        XCTAssertEqual(viewModel.results.compactMap(windowID), [1, 2, 3])
+        XCTAssertEqual(viewModel.selectedIndex, 1)
+    }
+
     func testCommandTabShowOrdersRemainingWindowsByLastUsedDescending() {
         let windows = [
             makeWindow(id: 1, app: "Arc", title: "Mail"),

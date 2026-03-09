@@ -68,6 +68,12 @@ final class SearchPanelController {
         panel.makeKey()
     }
 
+    func performQuickCommandTabSwitch() {
+        let currentWindowID = windowManager.currentFrontmostWindowID()
+        guard viewModel.prepareQuickCommandTabSwitch(initiallySelectedWindowID: currentWindowID) else { return }
+        viewModel.commitSelection()
+    }
+
     func cycleCommandTabSelection(forward: Bool) {
         guard commandTabActive else { return }
         viewModel.moveSelection(delta: forward ? 1 : -1)
@@ -117,6 +123,12 @@ final class SearchPanelController {
     func cancelFastSearch() {
         guard fastSearchActive else { return }
         hidePanel()
+    }
+
+    func refreshVisibleResults() {
+        guard panel?.isVisible == true else { return }
+        let currentWindowID = windowManager.currentFrontmostWindowID()
+        viewModel.refreshVisibleResults(initiallySelectedWindowID: currentWindowID)
     }
 
     private func makePanel() -> NSPanel {

@@ -4,6 +4,7 @@ import Foundation
 
 final class CommandTabInterceptor {
     private let onSessionStart: @MainActor () -> Void
+    private let onQuickSwitch: @MainActor () -> Void
     private let onCycleSelection: @MainActor (_ forward: Bool) -> Void
     private let onType: @MainActor (_ text: String) -> Void
     private let onDeleteBackward: @MainActor () -> Void
@@ -13,10 +14,14 @@ final class CommandTabInterceptor {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var commandTabSessionActive = false
+    private var sessionStartTime: CFAbsoluteTime = 0
+    private var panelPresented = false
+    private var pendingPresentationWorkItem: DispatchWorkItem?
     private let debugCommandTab = ProcessInfo.processInfo.environment["GINMI_DEBUG_COMMAND_TAB"] == "1"
 
     init(
         onSessionStart: @escaping @MainActor () -> Void,
+        onQuickSwitch: @escaping @MainActor () -> Void,
         onCycleSelection: @escaping @MainActor (_ forward: Bool) -> Void,
         onType: @escaping @MainActor (_ text: String) -> Void,
         onDeleteBackward: @escaping @MainActor () -> Void,
@@ -25,6 +30,7 @@ final class CommandTabInterceptor {
         onSessionEnd: @escaping @MainActor () -> Void
     ) {
         self.onSessionStart = onSessionStart
+        self.onQuickSwitch = onQuickSwitch
         self.onCycleSelection = onCycleSelection
         self.onType = onType
         self.onDeleteBackward = onDeleteBackward
@@ -65,6 +71,7 @@ final class CommandTabInterceptor {
     }
 
     func stop() {
+        cancelPendingPresentation()
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
@@ -87,14 +94,7 @@ final class CommandTabInterceptor {
             if type == .flagsChanged {
                 let commandStillHeld = event.flags.contains(.maskCommand)
                 if commandTabSessionActive && !commandStillHeld {
-                    commandTabSessionActive = false
-                    let onSessionEnd = self.onSessionEnd
-                    if debugCommandTab {
-                        print("GINMI_COMMAND_TAB end")
-                    }
-                    MainActor.assumeIsolated {
-                        onSessionEnd()
-                    }
+                    handleCommandRelease()
                     return nil
                 }
             }
@@ -108,19 +108,13 @@ final class CommandTabInterceptor {
 
         if isCommandTab {
             if commandTabSessionActive {
+                ensureSessionPresented()
                 let onCycleSelection = self.onCycleSelection
                 MainActor.assumeIsolated {
                     onCycleSelection(!isReverse)
                 }
             } else {
-                commandTabSessionActive = true
-                let onSessionStart = self.onSessionStart
-                if debugCommandTab {
-                    print("GINMI_COMMAND_TAB start")
-                }
-                MainActor.assumeIsolated {
-                    onSessionStart()
-                }
+                beginSession()
             }
             return nil
         }
@@ -130,7 +124,7 @@ final class CommandTabInterceptor {
         }
 
         if keyCode == 53 { // Escape
-            commandTabSessionActive = false
+            resetSessionState()
             let onSessionCancel = self.onSessionCancel
             if debugCommandTab {
                 print("GINMI_COMMAND_TAB cancel")
@@ -142,6 +136,7 @@ final class CommandTabInterceptor {
         }
 
         if keyCode == 125 { // Down arrow
+            ensureSessionPresented()
             let onCycleSelection = self.onCycleSelection
             MainActor.assumeIsolated {
                 onCycleSelection(true)
@@ -150,6 +145,7 @@ final class CommandTabInterceptor {
         }
 
         if keyCode == 126 { // Up arrow
+            ensureSessionPresented()
             let onCycleSelection = self.onCycleSelection
             MainActor.assumeIsolated {
                 onCycleSelection(false)
@@ -158,6 +154,7 @@ final class CommandTabInterceptor {
         }
 
         if keyCode == 51 { // Delete
+            ensureSessionPresented()
             let onDeleteBackward = self.onDeleteBackward
             MainActor.assumeIsolated {
                 onDeleteBackward()
@@ -166,6 +163,7 @@ final class CommandTabInterceptor {
         }
 
         if keyCode == 12, flags.contains(.maskShift) { // Q
+            ensureSessionPresented()
             let onQuitSelection = self.onQuitSelection
             MainActor.assumeIsolated {
                 onQuitSelection()
@@ -174,6 +172,7 @@ final class CommandTabInterceptor {
         }
 
         if let text = extractTypeableText(from: event), !text.isEmpty {
+            ensureSessionPresented()
             let onType = self.onType
             if debugCommandTab {
                 print("GINMI_COMMAND_TAB type=\"\(text.lowercased())\" keyCode=\(keyCode)")
@@ -185,6 +184,92 @@ final class CommandTabInterceptor {
         }
 
         return Unmanaged.passUnretained(event)
+    }
+
+    private func beginSession() {
+        commandTabSessionActive = true
+        sessionStartTime = CFAbsoluteTimeGetCurrent()
+        panelPresented = false
+
+        if debugCommandTab {
+            print("GINMI_COMMAND_TAB start")
+        }
+
+        let thresholdMs = quickSwitchThresholdMs()
+        guard thresholdMs > 0 else {
+            presentSession()
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.presentSession()
+        }
+        pendingPresentationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(thresholdMs), execute: workItem)
+    }
+
+    private func ensureSessionPresented() {
+        guard commandTabSessionActive, !panelPresented else { return }
+        presentSession()
+    }
+
+    private func presentSession() {
+        guard commandTabSessionActive, !panelPresented else { return }
+        cancelPendingPresentation()
+        panelPresented = true
+        let onSessionStart = self.onSessionStart
+        MainActor.assumeIsolated {
+            onSessionStart()
+        }
+    }
+
+    private func handleCommandRelease() {
+        let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - sessionStartTime) * 1000)
+        let thresholdMs = quickSwitchThresholdMs()
+
+        if !panelPresented && thresholdMs > 0 && elapsedMs < thresholdMs {
+            resetSessionState()
+            let onQuickSwitch = self.onQuickSwitch
+            if debugCommandTab {
+                print("GINMI_COMMAND_TAB quickSwitch elapsedMs=\(elapsedMs)")
+            }
+            MainActor.assumeIsolated {
+                onQuickSwitch()
+            }
+            return
+        }
+
+        if !panelPresented {
+            presentSession()
+        }
+
+        resetSessionState()
+        let onSessionEnd = self.onSessionEnd
+        if debugCommandTab {
+            print("GINMI_COMMAND_TAB end")
+        }
+        MainActor.assumeIsolated {
+            onSessionEnd()
+        }
+    }
+
+    private func cancelPendingPresentation() {
+        pendingPresentationWorkItem?.cancel()
+        pendingPresentationWorkItem = nil
+    }
+
+    private func resetSessionState() {
+        cancelPendingPresentation()
+        commandTabSessionActive = false
+        panelPresented = false
+        sessionStartTime = 0
+    }
+
+    private func quickSwitchThresholdMs() -> Int {
+        if let configured = UserDefaults.standard.object(forKey: "commandTabQuickSwitchThresholdMs") as? Int {
+            return max(0, configured)
+        }
+        return 70
     }
 
     private func extractTypeableText(from event: CGEvent) -> String? {
