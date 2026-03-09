@@ -129,6 +129,7 @@ final class WindowManager: WindowManaging {
             return keep
         }
         dedupedWindows = filterGenericUntitledCompanions(dedupedWindows)
+        dedupedWindows = collapseDuplicateTitledWindows(dedupedWindows)
 
         if debugWindowList {
             debugLogWindows(dedupedWindows)
@@ -434,6 +435,62 @@ final class WindowManager: WindowManaging {
         }
 
         return kept
+    }
+
+    func collapseDuplicateTitledWindows(_ windows: [WindowInfo]) -> [WindowInfo] {
+        var groupedIndices: [String: [Int]] = [:]
+
+        for (index, window) in windows.enumerated() {
+            let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalizedTitle.isEmpty else { continue }
+            let key = "\(window.ownerPID)|\(normalizedTitle)|\(window.boundsSignature)"
+            groupedIndices[key, default: []].append(index)
+        }
+
+        var keptByKey: [String: WindowInfo] = [:]
+        for (key, indices) in groupedIndices {
+            let candidates = indices.map { windows[$0] }
+            let best = candidates.max { lhs, rhs in
+                if lhs.isOnScreen != rhs.isOnScreen {
+                    return !lhs.isOnScreen && rhs.isOnScreen
+                }
+                if lhs.alpha != rhs.alpha {
+                    return lhs.alpha < rhs.alpha
+                }
+                return lhs.id > rhs.id
+            }
+            if let best {
+                keptByKey[key] = best
+            }
+        }
+
+        var collapsed: [WindowInfo] = []
+        collapsed.reserveCapacity(windows.count)
+
+        for window in windows {
+            let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalizedTitle.isEmpty else {
+                collapsed.append(window)
+                continue
+            }
+
+            let key = "\(window.ownerPID)|\(normalizedTitle)|\(window.boundsSignature)"
+            guard let kept = keptByKey[key] else {
+                collapsed.append(window)
+                continue
+            }
+
+            if kept.id == window.id {
+                collapsed.append(window)
+            } else if debugWindowFiltering || debugWindowList {
+                print(
+                    "DROP_DUPLICATE_TITLED id=\(window.id) pid=\(window.ownerPID) bundle=\(window.ownerBundleID) app=\(window.ownerName) " +
+                        "title=\"\(window.title)\" bounds=\(window.boundsSignature) kept=\(kept.id)"
+                )
+            }
+        }
+
+        return collapsed
     }
 
     private func debugDrop(windowID: Int, ownerName: String, reason: String, info: [String: Any]) {

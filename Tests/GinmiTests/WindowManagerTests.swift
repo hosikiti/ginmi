@@ -15,7 +15,20 @@ final class WindowManagerTests: XCTestCase {
         XCTAssertEqual(filtered.map(\.id), [2, 3])
     }
 
-    private func makeWindow(id: Int, pid: pid_t, app: String, title: String, bounds: CGRect) -> WindowInfo {
+    func testCollapseDuplicateTitledWindowsKeepsSingleVisibleForkStyleWindow() {
+        let manager = WindowManager()
+        let windows = [
+            makeWindow(id: 4724, pid: 53899, app: "Fork", title: "ginmi", bounds: CGRect(x: 0, y: 38, width: 1476, height: 944), isOnScreen: false),
+            makeWindow(id: 4725, pid: 53899, app: "Fork", title: "ginmi", bounds: CGRect(x: 0, y: 38, width: 1476, height: 944), isOnScreen: true),
+            makeWindow(id: 4726, pid: 53899, app: "Fork", title: "ginmi", bounds: CGRect(x: 0, y: 38, width: 1476, height: 944), isOnScreen: false)
+        ]
+
+        let collapsed = manager.collapseDuplicateTitledWindows(windows)
+
+        XCTAssertEqual(collapsed.map(\.id), [4725])
+    }
+
+    private func makeWindow(id: Int, pid: pid_t, app: String, title: String, bounds: CGRect, isOnScreen: Bool = true) -> WindowInfo {
         WindowInfo(
             id: id,
             ownerPID: pid,
@@ -23,7 +36,7 @@ final class WindowManagerTests: XCTestCase {
             ownerBundleID: "test.\(app.lowercased())",
             title: title,
             layer: 0,
-            isOnScreen: true,
+            isOnScreen: isOnScreen,
             alpha: 1.0,
             bounds: bounds
         )
