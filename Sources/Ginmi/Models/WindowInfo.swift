@@ -29,6 +29,6 @@ struct WindowInfo: Identifiable, Hashable {
     }
 
     var identifier: String {
-        "\(ownerBundleID)#\(id)#\(displayTitle.lowercased())"
+        "\(ownerPID)#\(id)"
     }
 }

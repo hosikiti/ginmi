@@ -36,6 +36,7 @@ final class SearchPanelController {
         self.panel = panel
         self.fastSearchActive = fastSearchMode
         let currentWindowID = windowManager.currentFrontmostWindowID()
+        viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
         viewModel.show(resetQuery: !fastSearchMode, mode: .standard, initiallySelectedWindowID: currentWindowID)
 
         position(panel)
@@ -50,6 +51,7 @@ final class SearchPanelController {
         fastSearchActive = false
         commandTabActive = true
         let currentWindowID = windowManager.currentFrontmostWindowID()
+        viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
         viewModel.show(resetQuery: true, mode: .commandTab, initiallySelectedWindowID: currentWindowID)
         if debugCommandTab {
             if let selected = viewModel.selectedWindow() {
@@ -129,6 +131,11 @@ final class SearchPanelController {
         guard panel?.isVisible == true else { return }
         let currentWindowID = windowManager.currentFrontmostWindowID()
         viewModel.refreshVisibleResults(initiallySelectedWindowID: currentWindowID)
+    }
+
+    func markFrontmostWindowAsUsed() {
+        let currentWindowID = windowManager.currentFrontmostWindowID()
+        viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
     }
 
     private func makePanel() -> NSPanel {

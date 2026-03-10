@@ -11,6 +11,11 @@ protocol WindowManaging {
 }
 
 final class WindowManager: WindowManaging, @unchecked Sendable {
+    private enum DefaultsKey {
+        static let excludedWindowTitleKeywords = "excludedWindowTitleKeywords"
+    }
+
+    private let defaults: UserDefaults
     private let debugWindowList = ProcessInfo.processInfo.environment["GINMI_DEBUG_WINDOWS"] == "1"
     private let debugWindowFiltering = ProcessInfo.processInfo.environment["GINMI_DEBUG_WINDOWS_VERBOSE"] == "1"
     private let windowCacheTTL: TimeInterval = 0.75
@@ -25,6 +30,10 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
     private var cachedWindows: [WindowInfo]?
     private var cacheDate: Date?
     private var cacheRefreshInFlight = false
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     func fetchAllWindows() -> [WindowInfo] {
         if let cached = cachedWindowSnapshot(requiringFreshness: true) {
@@ -465,7 +474,18 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
         return nil
     }
 
-    private func shouldKeepWindow(_ window: WindowInfo) -> Bool {
+    func shouldKeepWindow(_ window: WindowInfo) -> Bool {
+        let normalizedTitle = window.displayTitle.lowercased()
+        let ownerName = window.ownerName.lowercased()
+        let bundleID = window.ownerBundleID.lowercased()
+        let keywords = excludedTitleKeywords()
+        let isExcludedByKeyword = keywords.contains { keyword in
+            normalizedTitle.contains(keyword) || ownerName.contains(keyword) || bundleID.contains(keyword)
+        }
+        if isExcludedByKeyword {
+            return false
+        }
+
         if !window.title.isEmpty {
             return true
         }
@@ -484,6 +504,19 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
         }
 
         return true
+    }
+
+    private func excludedTitleKeywords() -> [String] {
+        let configured = defaults.string(forKey: DefaultsKey.excludedWindowTitleKeywords) ?? ""
+        let parsed = configured
+            .components(separatedBy: CharacterSet(charactersIn: ",\n;"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+
+        if parsed.isEmpty {
+            return ["autofill"]
+        }
+        return parsed
     }
 
     func filterGenericUntitledCompanions(_ windows: [WindowInfo]) -> [WindowInfo] {

@@ -33,8 +33,12 @@ final class SearchShortcutStore {
         usage[windowIdentifier, default: 0] += 1
         defaults.set(usage, forKey: Keys.usageCount)
 
+        touchRecency(for: windowIdentifier)
+    }
+
+    func touchRecency(for windowIdentifier: String, at date: Date = Date()) {
         var recency = defaults.dictionary(forKey: Keys.lastUsed) as? [String: TimeInterval] ?? [:]
-        recency[windowIdentifier] = Date().timeIntervalSince1970
+        recency[windowIdentifier] = date.timeIntervalSince1970
         defaults.set(recency, forKey: Keys.lastUsed)
     }
 

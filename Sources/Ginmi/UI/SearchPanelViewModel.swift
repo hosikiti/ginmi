@@ -97,6 +97,13 @@ final class SearchPanelViewModel: ObservableObject {
         allWindows = windowManager.fetchAllWindows().filter { !isSuppressed(window: $0) }
     }
 
+    func markFrontmostWindowAsUsed(windowID: Int?) {
+        guard let windowID else { return }
+        let windows = windowManager.fetchAllWindows()
+        guard let window = windows.first(where: { $0.id == windowID }) else { return }
+        shortcutsStore.touchRecency(for: window.identifier)
+    }
+
     func refreshVisibleResults(initiallySelectedWindowID: Int? = nil) {
         guard isVisible else { return }
 

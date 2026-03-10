@@ -146,6 +146,52 @@ final class SearchPanelViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedIndex, 0)
     }
 
+    func testMarkFrontmostWindowAsUsedUpdatesNextInitialOrdering() {
+        let windows = [
+            makeWindow(id: 1, app: "Arc", title: "Mail"),
+            makeWindow(id: 2, app: "Ghostty", title: "Terminal"),
+            makeWindow(id: 3, app: "Code", title: "Ginmi")
+        ]
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        let viewModel = SearchPanelViewModel(
+            windowManager: FakeWindowManager(windows: windows),
+            installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: FakeAppTerminator(),
+            searcher: FuzzySearcher(),
+            shortcutsStore: SearchShortcutStore(defaults: defaults),
+            defaults: defaults
+        )
+
+        viewModel.markFrontmostWindowAsUsed(windowID: 3)
+        viewModel.show(resetQuery: true, mode: .standard, initiallySelectedWindowID: 1)
+
+        XCTAssertEqual(viewModel.results.compactMap(windowID), [1, 3, 2])
+    }
+
+    func testInitialOrderingUsesStableWindowIdentifierWhenTitleChanges() {
+        let oldTitleWindow = makeWindow(id: 2, app: "Arc", title: "Inbox")
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        let shortcutsStore = SearchShortcutStore(defaults: defaults)
+        shortcutsStore.touchRecency(for: oldTitleWindow.identifier, at: Date(timeIntervalSince1970: 200))
+
+        let windows = [
+            makeWindow(id: 1, app: "Ghostty", title: "Terminal"),
+            makeWindow(id: 2, app: "Arc", title: "Inbox (Updated)")
+        ]
+        let viewModel = SearchPanelViewModel(
+            windowManager: FakeWindowManager(windows: windows),
+            installedAppManager: FakeInstalledAppManager(apps: []),
+            appTerminator: FakeAppTerminator(),
+            searcher: FuzzySearcher(),
+            shortcutsStore: shortcutsStore,
+            defaults: defaults
+        )
+
+        viewModel.show(resetQuery: true, mode: .standard, initiallySelectedWindowID: 1)
+
+        XCTAssertEqual(viewModel.results.compactMap(windowID), [1, 2])
+    }
+
     func testFallsBackToInstalledAppsWhenNoWindowsMatchAndSettingEnabled() {
         let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
         defaults.set(true, forKey: "searchInstalledAppsFallbackEnabled")

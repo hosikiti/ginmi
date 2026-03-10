@@ -28,12 +28,77 @@ final class WindowManagerTests: XCTestCase {
         XCTAssertEqual(collapsed.map(\.id), [4725])
     }
 
-    private func makeWindow(id: Int, pid: pid_t, app: String, title: String, bounds: CGRect, isOnScreen: Bool = true) -> WindowInfo {
+    func testShouldKeepWindowDropsAutofillHelpers() {
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        defaults.removeObject(forKey: "excludedWindowTitleKeywords")
+        let manager = WindowManager(defaults: defaults)
+        let autofillByName = makeWindow(
+            id: 1,
+            pid: 300,
+            app: "AutoFill",
+            title: "AutoFill",
+            bounds: CGRect(x: 10, y: 10, width: 400, height: 200),
+            bundleID: "com.apple.some.helper"
+        )
+        let autofillByBundle = makeWindow(
+            id: 2,
+            pid: 301,
+            app: "Some Helper",
+            title: "AutoFill UI",
+            bounds: CGRect(x: 10, y: 10, width: 400, height: 200),
+            bundleID: "com.apple.autofillui"
+        )
+        let normalWindow = makeWindow(
+            id: 3,
+            pid: 302,
+            app: "Arc",
+            title: "Inbox",
+            bounds: CGRect(x: 10, y: 10, width: 1200, height: 900),
+            bundleID: "company.thebrowser.Browser"
+        )
+
+        XCTAssertFalse(manager.shouldKeepWindow(autofillByName))
+        XCTAssertFalse(manager.shouldKeepWindow(autofillByBundle))
+        XCTAssertTrue(manager.shouldKeepWindow(normalWindow))
+    }
+
+    func testShouldKeepWindowRespectsConfiguredExcludedKeywords() {
+        let defaults = UserDefaults(suiteName: "GinmiTests-\(UUID().uuidString)")!
+        defaults.set("floating panel,private", forKey: "excludedWindowTitleKeywords")
+        let manager = WindowManager(defaults: defaults)
+        let excluded = makeWindow(
+            id: 10,
+            pid: 800,
+            app: "Some App",
+            title: "Private Floating Panel",
+            bounds: CGRect(x: 10, y: 10, width: 800, height: 500)
+        )
+        let included = makeWindow(
+            id: 11,
+            pid: 801,
+            app: "Some App",
+            title: "Main Document",
+            bounds: CGRect(x: 10, y: 10, width: 800, height: 500)
+        )
+
+        XCTAssertFalse(manager.shouldKeepWindow(excluded))
+        XCTAssertTrue(manager.shouldKeepWindow(included))
+    }
+
+    private func makeWindow(
+        id: Int,
+        pid: pid_t,
+        app: String,
+        title: String,
+        bounds: CGRect,
+        isOnScreen: Bool = true,
+        bundleID: String? = nil
+    ) -> WindowInfo {
         WindowInfo(
             id: id,
             ownerPID: pid,
             ownerName: app,
-            ownerBundleID: "test.\(app.lowercased())",
+            ownerBundleID: bundleID ?? "test.\(app.lowercased())",
             title: title,
             layer: 0,
             isOnScreen: isOnScreen,

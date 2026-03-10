@@ -113,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startObservingWorkspaceChanges() {
         let center = NSWorkspace.shared.notificationCenter
         let names: [Notification.Name] = [
+            NSWorkspace.didActivateApplicationNotification,
             NSWorkspace.didLaunchApplicationNotification,
             NSWorkspace.didTerminateApplicationNotification,
             NSWorkspace.didHideApplicationNotification,
@@ -122,8 +123,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workspaceNotificationObservers = names.map { name in
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.scheduleWindowRefreshAfterWorkspaceChange()
+                    if name == NSWorkspace.didActivateApplicationNotification {
+                        self?.scheduleActiveWindowTracking()
+                    } else {
+                        self?.scheduleWindowRefreshAfterWorkspaceChange()
+                    }
                 }
+            }
+        }
+    }
+
+    private func scheduleActiveWindowTracking() {
+        for delay in [0.03, 0.15] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.panelController.markFrontmostWindowAsUsed()
+                self.panelController.refreshVisibleResults()
             }
         }
     }
