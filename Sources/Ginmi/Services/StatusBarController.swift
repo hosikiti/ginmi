@@ -15,7 +15,7 @@ final class StatusBarController: NSObject {
     func start() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "rectangle.grid.1x2", accessibilityDescription: "Ginmi")
+            button.image = GinmiIconFactory.statusBarIcon()
             button.imagePosition = .imageOnly
             button.toolTip = "Ginmi"
         }

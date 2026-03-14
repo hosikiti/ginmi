@@ -71,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
+        NSApp.applicationIconImage = GinmiIconFactory.appIcon()
         NSApp.setActivationPolicy(.accessory)
         NSApp.windows.forEach { $0.orderOut(nil) }
         migrateCommandTabQuickSwitchThresholdIfNeeded()
