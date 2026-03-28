@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import Ginmi
 
 final class WindowManagerTests: XCTestCase {
@@ -83,6 +84,32 @@ final class WindowManagerTests: XCTestCase {
 
         XCTAssertFalse(manager.shouldKeepWindow(excluded))
         XCTAssertTrue(manager.shouldKeepWindow(included))
+    }
+
+    func testShouldAttemptAXTitleLookupSkipsObviousHelperSurfaces() {
+        let manager = WindowManager()
+
+        XCTAssertFalse(
+            manager.shouldAttemptAXTitleLookup(
+                cgTitle: "",
+                bounds: CGRect(x: 0, y: 0, width: 1512, height: 37),
+                app: nil
+            )
+        )
+        XCTAssertFalse(
+            manager.shouldAttemptAXTitleLookup(
+                cgTitle: "",
+                bounds: CGRect(x: 0, y: 0, width: 54, height: 54),
+                app: nil
+            )
+        )
+        XCTAssertTrue(
+            manager.shouldAttemptAXTitleLookup(
+                cgTitle: "",
+                bounds: CGRect(x: 0, y: 38, width: 1512, height: 944),
+                app: nil
+            )
+        )
     }
 
     private func makeWindow(

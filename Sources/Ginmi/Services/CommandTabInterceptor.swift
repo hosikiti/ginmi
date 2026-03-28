@@ -3,6 +3,9 @@ import AppKit
 import Foundation
 
 final class CommandTabInterceptor {
+    private let defaultCommandTabHoldDelayMs = 300
+    private let defaultQuickSwitchEnabled = true
+    private let onCommandPressed: @MainActor () -> Void
     private let onSessionStart: @MainActor () -> Void
     private let onQuickSwitch: @MainActor () -> Void
     private let onCycleSelection: @MainActor (_ forward: Bool) -> Void
@@ -17,9 +20,11 @@ final class CommandTabInterceptor {
     private var sessionStartTime: CFAbsoluteTime = 0
     private var panelPresented = false
     private var pendingPresentationWorkItem: DispatchWorkItem?
+    private var commandKeyHeld = false
     private let debugCommandTab = ProcessInfo.processInfo.environment["GINMI_DEBUG_COMMAND_TAB"] == "1"
 
     init(
+        onCommandPressed: @escaping @MainActor () -> Void,
         onSessionStart: @escaping @MainActor () -> Void,
         onQuickSwitch: @escaping @MainActor () -> Void,
         onCycleSelection: @escaping @MainActor (_ forward: Bool) -> Void,
@@ -29,6 +34,7 @@ final class CommandTabInterceptor {
         onSessionCancel: @escaping @MainActor () -> Void,
         onSessionEnd: @escaping @MainActor () -> Void
     ) {
+        self.onCommandPressed = onCommandPressed
         self.onSessionStart = onSessionStart
         self.onQuickSwitch = onQuickSwitch
         self.onCycleSelection = onCycleSelection
@@ -93,6 +99,17 @@ final class CommandTabInterceptor {
         guard type == .keyDown else {
             if type == .flagsChanged {
                 let commandStillHeld = event.flags.contains(.maskCommand)
+                if commandStillHeld && !commandKeyHeld && !commandTabSessionActive {
+                    commandKeyHeld = true
+                    let onCommandPressed = self.onCommandPressed
+                    let start = PerfLogger.start("command.flags_changed", details: "event=command_down")
+                    MainActor.assumeIsolated {
+                        onCommandPressed()
+                    }
+                    PerfLogger.end("command.flags_changed", from: start, details: "event=command_down")
+                } else if !commandStillHeld {
+                    commandKeyHeld = false
+                }
                 if commandTabSessionActive && !commandStillHeld {
                     handleCommandRelease()
                     return nil
@@ -187,6 +204,7 @@ final class CommandTabInterceptor {
     }
 
     private func beginSession() {
+        let start = PerfLogger.start("command_tab.begin_session")
         commandTabSessionActive = true
         sessionStartTime = CFAbsoluteTimeGetCurrent()
         panelPresented = false
@@ -195,17 +213,19 @@ final class CommandTabInterceptor {
             print("GINMI_COMMAND_TAB start")
         }
 
-        let thresholdMs = quickSwitchThresholdMs()
-        guard thresholdMs > 0 else {
+        guard isQuickSwitchEnabled() else {
             presentSession()
+            PerfLogger.end("command_tab.begin_session", from: start, details: "quick_switch=false")
             return
         }
 
+        let holdDelayMs = commandTabHoldDelayMs()
         let workItem = DispatchWorkItem { [weak self] in
             self?.presentSession()
         }
         pendingPresentationWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(thresholdMs), execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(holdDelayMs), execute: workItem)
+        PerfLogger.end("command_tab.begin_session", from: start, details: "hold_delay_ms=\(holdDelayMs)")
     }
 
     private func ensureSessionPresented() {
@@ -215,19 +235,22 @@ final class CommandTabInterceptor {
 
     private func presentSession() {
         guard commandTabSessionActive, !panelPresented else { return }
+        let start = PerfLogger.start("command_tab.present_session")
         cancelPendingPresentation()
         panelPresented = true
         let onSessionStart = self.onSessionStart
         MainActor.assumeIsolated {
             onSessionStart()
         }
+        PerfLogger.end("command_tab.present_session", from: start)
     }
 
     private func handleCommandRelease() {
+        let start = PerfLogger.start("command_tab.handle_release")
         let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - sessionStartTime) * 1000)
-        let thresholdMs = quickSwitchThresholdMs()
+        let holdDelayMs = commandTabHoldDelayMs()
 
-        if !panelPresented && thresholdMs > 0 && elapsedMs < thresholdMs {
+        if isQuickSwitchEnabled(), !panelPresented && elapsedMs < holdDelayMs {
             resetSessionState()
             let onQuickSwitch = self.onQuickSwitch
             if debugCommandTab {
@@ -236,6 +259,7 @@ final class CommandTabInterceptor {
             MainActor.assumeIsolated {
                 onQuickSwitch()
             }
+            PerfLogger.end("command_tab.handle_release", from: start, details: "path=quick_switch elapsed_ms=\(elapsedMs)")
             return
         }
 
@@ -251,6 +275,7 @@ final class CommandTabInterceptor {
         MainActor.assumeIsolated {
             onSessionEnd()
         }
+        PerfLogger.end("command_tab.handle_release", from: start, details: "path=panel_presented elapsed_ms=\(elapsedMs)")
     }
 
     private func cancelPendingPresentation() {
@@ -263,13 +288,17 @@ final class CommandTabInterceptor {
         commandTabSessionActive = false
         panelPresented = false
         sessionStartTime = 0
+        commandKeyHeld = false
     }
 
-    private func quickSwitchThresholdMs() -> Int {
-        if let configured = UserDefaults.standard.object(forKey: "commandTabQuickSwitchThresholdMs") as? Int {
-            return max(0, configured)
-        }
-        return 70
+    private func commandTabHoldDelayMs() -> Int {
+        let configured = UserDefaults.standard.object(forKey: "commandTabHoldDelayMs") as? Int
+        return max(0, configured ?? defaultCommandTabHoldDelayMs)
+    }
+
+    private func isQuickSwitchEnabled() -> Bool {
+        let configured = UserDefaults.standard.object(forKey: "commandTabQuickSwitchEnabled") as? Bool
+        return configured ?? defaultQuickSwitchEnabled
     }
 
     private func extractTypeableText(from event: CGEvent) -> String? {

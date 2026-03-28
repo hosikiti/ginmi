@@ -4,6 +4,9 @@ import Foundation
 
 protocol WindowManaging {
     func fetchAllWindows() -> [WindowInfo]
+    func fetchCachedWindows() -> [WindowInfo]
+    func predictedFrontmostWindowID() -> Int?
+    func prewarmWindowCache()
     func icon(for window: WindowInfo) -> NSImage
     func currentFrontmostWindowID() -> Int?
     @discardableResult
@@ -13,6 +16,11 @@ protocol WindowManaging {
 final class WindowManager: WindowManaging, @unchecked Sendable {
     private enum DefaultsKey {
         static let excludedWindowTitleKeywords = "excludedWindowTitleKeywords"
+    }
+
+    private struct AXTitleCacheEntry {
+        let titles: [String]
+        let date: Date
     }
 
     private let defaults: UserDefaults
@@ -27,30 +35,94 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
         queue.maxConcurrentOperationCount = 1
         return queue
     }()
+    private let axTitleCacheTTL: TimeInterval = 15
+    private let axTitleCacheLock = NSLock()
     private var cachedWindows: [WindowInfo]?
     private var cacheDate: Date?
     private var cacheRefreshInFlight = false
+    private var trackedFrontmostWindowID: Int?
+    private var trackedFrontmostPID: pid_t?
+    private var axTitleCandidateCache: [String: AXTitleCacheEntry] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
     func fetchAllWindows() -> [WindowInfo] {
+        let total = PerfLogger.start("window_manager.fetch_all_windows")
         if let cached = cachedWindowSnapshot(requiringFreshness: true) {
+            PerfLogger.end("window_manager.fetch_all_windows", from: total, details: "source=fresh_cache count=\(cached.count)")
             return cached
         }
 
         if let cached = cachedWindowSnapshot(requiringFreshness: false) {
             scheduleWindowCacheRefresh()
+            PerfLogger.end("window_manager.fetch_all_windows", from: total, details: "source=stale_cache count=\(cached.count)")
             return cached
         }
 
-        let fresh = computeAllWindows()
+        let fresh = PerfLogger.measure("window_manager.compute_all_windows_sync") {
+            computeAllWindows()
+        }
         storeWindowCache(fresh)
+        PerfLogger.end("window_manager.fetch_all_windows", from: total, details: "source=sync_compute count=\(fresh.count)")
         return fresh
     }
 
+    func fetchCachedWindows() -> [WindowInfo] {
+        PerfLogger.measure("window_manager.fetch_cached_windows") {
+            let cached = cachedWindowSnapshot(requiringFreshness: false) ?? []
+            PerfLogger.log("cached_windows_count=\(cached.count)")
+            return cached
+        }
+    }
+
+    func predictedFrontmostWindowID() -> Int? {
+        let total = PerfLogger.start("window_manager.predicted_frontmost_window_id")
+        let windows = fetchCachedWindows()
+        guard !windows.isEmpty else {
+            PerfLogger.end("window_manager.predicted_frontmost_window_id", from: total, details: "source=no_cached_windows")
+            return nil
+        }
+
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let trackedWindowID: Int?
+        let trackedPID: pid_t?
+        cacheLock.lock()
+        trackedWindowID = trackedFrontmostWindowID
+        trackedPID = trackedFrontmostPID
+        cacheLock.unlock()
+
+        if let trackedWindowID,
+           let tracked = windows.first(where: {
+               $0.id == trackedWindowID && (frontmostPID == nil || $0.ownerPID == frontmostPID)
+           })
+        {
+            PerfLogger.end("window_manager.predicted_frontmost_window_id", from: total, details: "source=tracked_window id=\(tracked.id)")
+            return tracked.id
+        }
+
+        if let frontmostPID,
+           let predicted = bestPredictedWindow(from: windows.filter { $0.ownerPID == frontmostPID })
+        {
+            PerfLogger.end("window_manager.predicted_frontmost_window_id", from: total, details: "source=frontmost_pid id=\(predicted.id)")
+            return predicted.id
+        }
+
+        if let trackedPID,
+           let predicted = bestPredictedWindow(from: windows.filter { $0.ownerPID == trackedPID })
+        {
+            PerfLogger.end("window_manager.predicted_frontmost_window_id", from: total, details: "source=tracked_pid id=\(predicted.id)")
+            return predicted.id
+        }
+
+        let predicted = bestPredictedWindow(from: windows)?.id
+        PerfLogger.end("window_manager.predicted_frontmost_window_id", from: total, details: "source=fallback id=\(predicted.map(String.init) ?? "nil")")
+        return predicted
+    }
+
     func prewarmWindowCache() {
+        PerfLogger.log("window_manager.prewarm_window_cache")
         scheduleWindowCacheRefresh(force: true)
     }
 
@@ -61,7 +133,9 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
     }
 
     private func computeAllWindows() -> [WindowInfo] {
+        let total = PerfLogger.start("window_manager.compute_all_windows")
         guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
+            PerfLogger.end("window_manager.compute_all_windows", from: total, details: "result=no_info_list")
             return []
         }
 
@@ -125,7 +199,12 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
             let axTitle: String?
             if cgTitle.isEmpty {
                 let allocationKey = "\(ownerPID)|\(boundsKey)"
-                let candidates = fetchAXTitleCandidates(pid: pid, windowID: windowID, bounds: bounds)
+                let candidates: [String]
+                if shouldAttemptAXTitleLookup(cgTitle: cgTitle, bounds: bounds, app: app) {
+                    candidates = fetchAXTitleCandidates(pid: pid, windowID: windowID, bounds: bounds)
+                } else {
+                    candidates = []
+                }
                 if candidates.isEmpty {
                     axTitle = nil
                 } else {
@@ -181,24 +260,34 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
             debugLogWindows(dedupedWindows)
         }
 
+        PerfLogger.end("window_manager.compute_all_windows", from: total, details: "count=\(dedupedWindows.count) raw_count=\(infoList.count)")
         return dedupedWindows
     }
 
     func icon(for window: WindowInfo) -> NSImage {
+        let start = PerfLogger.start("window_manager.icon", details: "app=\(window.ownerName)")
         guard let app = NSRunningApplication(processIdentifier: window.ownerPID) else {
+            PerfLogger.end("window_manager.icon", from: start, details: "app=\(window.ownerName) source=empty")
             return NSImage(size: NSSize(width: 16, height: 16))
         }
-        return app.icon ?? NSImage(size: NSSize(width: 16, height: 16))
+        let icon = app.icon ?? NSImage(size: NSSize(width: 16, height: 16))
+        PerfLogger.logIfSlow(stage: "window_manager.icon", from: start, thresholdMs: 1.5, details: "app=\(window.ownerName)")
+        return icon
     }
 
     func currentFrontmostWindowID() -> Int? {
+        let total = PerfLogger.start("window_manager.current_frontmost_window_id")
         guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
-            return fallbackFrontmostWindowID()
+            let fallback = fallbackFrontmostWindowID()
+            PerfLogger.end("window_manager.current_frontmost_window_id", from: total, details: "source=no_frontmost_app id=\(fallback.map(String.init) ?? "nil")")
+            return fallback
         }
 
         let pid = frontmostApp.processIdentifier
         guard pid != ProcessInfo.processInfo.processIdentifier else {
-            return fallbackFrontmostWindowID()
+            let fallback = fallbackFrontmostWindowID()
+            PerfLogger.end("window_manager.current_frontmost_window_id", from: total, details: "source=own_process_fallback id=\(fallback.map(String.init) ?? "nil")")
+            return fallback
         }
 
         let appElement = AXUIElementCreateApplication(pid)
@@ -222,16 +311,22 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
         }
 
         if let matched = matchFrontmostWindowID(pid: pid, title: focusedTitle, bounds: focusedBounds) {
+            trackFrontmostWindow(windowID: matched, pid: pid)
+            PerfLogger.end("window_manager.current_frontmost_window_id", from: total, details: "source=ax_match id=\(matched)")
             return matched
         }
 
-        return fallbackFrontmostWindowID(preferredPID: pid)
+        let fallback = fallbackFrontmostWindowID(preferredPID: pid)
+        trackFrontmostWindow(windowID: fallback, pid: pid)
+        PerfLogger.end("window_manager.current_frontmost_window_id", from: total, details: "source=fallback id=\(fallback.map(String.init) ?? "nil")")
+        return fallback
     }
 
     @discardableResult
     func activate(window: WindowInfo) -> Bool {
         guard let app = NSRunningApplication(processIdentifier: window.ownerPID) else { return false }
         app.activate(options: [.activateAllWindows])
+        trackFrontmostWindow(windowID: window.id, pid: window.ownerPID)
 
         let appElement = AXUIElementCreateApplication(window.ownerPID)
         guard let windows = copyAXWindows(for: appElement) else { return true }
@@ -254,13 +349,30 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
     }
 
     private func fetchAXTitleCandidates(pid: pid_t, windowID: Int, bounds: CGRect) -> [String] {
+        let start = PerfLogger.start("window_manager.fetch_ax_title_candidates", details: "pid=\(pid) window_id=\(windowID)")
+        let cacheKey = "\(pid)|\(boundsSignature(from: bounds))"
+        if let cached = cachedAXTitleCandidates(for: cacheKey) {
+            PerfLogger.end(
+                "window_manager.fetch_ax_title_candidates",
+                from: start,
+                details: "result=cache_hit count=\(cached.count)"
+            )
+            return cached
+        }
+
         let appElement = AXUIElementCreateApplication(pid)
-        guard let windows = copyAXWindows(for: appElement) else { return [] }
+        guard let windows = copyAXWindows(for: appElement) else {
+            storeAXTitleCandidates([], for: cacheKey)
+            PerfLogger.end("window_manager.fetch_ax_title_candidates", from: start, details: "result=no_windows")
+            return []
+        }
 
         var boundsMatchTitles: [String] = []
         for window in windows {
             if let axWindowID = copyAXInt(attribute: "AXWindowNumber", element: window), axWindowID == windowID {
                 if let title = copyAXString(attribute: kAXTitleAttribute as CFString, element: window), !title.isEmpty {
+                    storeAXTitleCandidates([title], for: cacheKey)
+                    PerfLogger.end("window_manager.fetch_ax_title_candidates", from: start, details: "result=exact_window_id count=1")
                     return [title]
                 }
             }
@@ -273,7 +385,32 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
                 }
             }
         }
+        storeAXTitleCandidates(boundsMatchTitles, for: cacheKey)
+        PerfLogger.logIfSlow(
+            stage: "window_manager.fetch_ax_title_candidates",
+            from: start,
+            thresholdMs: 2.0,
+            details: "pid=\(pid) window_id=\(windowID) count=\(boundsMatchTitles.count)"
+        )
         return boundsMatchTitles
+    }
+
+    private func cachedAXTitleCandidates(for key: String) -> [String]? {
+        axTitleCacheLock.lock()
+        defer { axTitleCacheLock.unlock() }
+
+        guard let entry = axTitleCandidateCache[key] else { return nil }
+        guard Date().timeIntervalSince(entry.date) < axTitleCacheTTL else {
+            axTitleCandidateCache.removeValue(forKey: key)
+            return nil
+        }
+        return entry.titles
+    }
+
+    private func storeAXTitleCandidates(_ titles: [String], for key: String) {
+        axTitleCacheLock.lock()
+        axTitleCandidateCache[key] = AXTitleCacheEntry(titles: titles, date: Date())
+        axTitleCacheLock.unlock()
     }
 
     private func copyAXWindows(for appElement: AXUIElement) -> [AXUIElement]? {
@@ -391,6 +528,33 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
         }
     }
 
+    private func trackFrontmostWindow(windowID: Int?, pid: pid_t?) {
+        cacheLock.lock()
+        trackedFrontmostWindowID = windowID
+        trackedFrontmostPID = pid
+        cacheLock.unlock()
+    }
+
+    private func bestPredictedWindow(from windows: [WindowInfo]) -> WindowInfo? {
+        windows.max { lhs, rhs in
+            if lhs.isOnScreen != rhs.isOnScreen {
+                return !lhs.isOnScreen && rhs.isOnScreen
+            }
+
+            if lhs.alpha != rhs.alpha {
+                return lhs.alpha < rhs.alpha
+            }
+
+            let lhsArea = lhs.bounds.size.width * lhs.bounds.size.height
+            let rhsArea = rhs.bounds.size.width * rhs.bounds.size.height
+            if lhsArea != rhsArea {
+                return lhsArea < rhsArea
+            }
+
+            return lhs.id < rhs.id
+        }
+    }
+
     private func matchFrontmostWindowID(pid: pid_t, title: String?, bounds: CGRect?) -> Int? {
         guard
             let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
@@ -499,6 +663,31 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
         }
 
         // Ignore tiny floating utility artifacts.
+        if width <= 120 || height <= 120 {
+            return false
+        }
+
+        return true
+    }
+
+    func shouldAttemptAXTitleLookup(cgTitle: String, bounds: CGRect, app: NSRunningApplication?) -> Bool {
+        if !cgTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return false
+        }
+
+        if app?.activationPolicy == .accessory {
+            return false
+        }
+
+        let width = bounds.size.width
+        let height = bounds.size.height
+
+        // Title-bar strips and menu-like bars are almost never real candidate windows.
+        if height <= 60, width >= 600 {
+            return false
+        }
+
+        // Tiny floating surfaces are almost always helper artifacts.
         if width <= 120 || height <= 120 {
             return false
         }

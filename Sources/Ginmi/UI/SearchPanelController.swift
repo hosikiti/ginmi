@@ -7,8 +7,12 @@ final class SearchPanelController {
     private let windowManager: any WindowManaging
     private var panel: NSPanel?
     private var localMonitor: Any?
+    private var pendingPresentationWorkItem: DispatchWorkItem?
+    private var prefetchedCommandTabWindows: [WindowInfo] = []
+    private var prefetchedCommandTabCurrentWindowID: Int?
     private var fastSearchActive = false
     private var commandTabActive = false
+    private var commandTabInteracted = false
     private let debugCommandTab = ProcessInfo.processInfo.environment["GINMI_DEBUG_COMMAND_TAB"] == "1"
 
     init(viewModel: SearchPanelViewModel, windowManager: any WindowManaging) {
@@ -31,43 +35,105 @@ final class SearchPanelController {
     }
 
     func showPanel(fastSearchMode: Bool) {
+        let total = PerfLogger.start("panel.show_standard", details: "fast_search=\(fastSearchMode)")
+        cancelPendingPresentationWorkItem()
         commandTabActive = false
         let panel = panel ?? makePanel()
         self.panel = panel
         self.fastSearchActive = fastSearchMode
-        let currentWindowID = windowManager.currentFrontmostWindowID()
-        viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
-        viewModel.show(resetQuery: !fastSearchMode, mode: .standard, initiallySelectedWindowID: currentWindowID)
+        let currentWindowID = PerfLogger.measure("panel.standard.current_frontmost") {
+            windowManager.currentFrontmostWindowID()
+        }
+        PerfLogger.measure("panel.standard.mark_frontmost") {
+            viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
+        }
+        PerfLogger.measure("panel.standard.viewmodel_show") {
+            viewModel.show(resetQuery: !fastSearchMode, mode: .standard, initiallySelectedWindowID: currentWindowID)
+        }
 
+        let presentStage = PerfLogger.start("panel.standard.present")
         position(panel)
         NSApp.activate(ignoringOtherApps: true)
         panel.orderFrontRegardless()
         panel.makeKey()
+        PerfLogger.end("panel.standard.present", from: presentStage)
+        PerfLogger.end("panel.show_standard", from: total)
     }
 
     func beginCommandTabSession() {
+        let total = PerfLogger.start("panel.begin_command_tab_session")
+        cancelPendingPresentationWorkItem()
         let panel = panel ?? makePanel()
         self.panel = panel
         fastSearchActive = false
         commandTabActive = true
-        let currentWindowID = windowManager.currentFrontmostWindowID()
-        viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
-        viewModel.show(resetQuery: true, mode: .commandTab, initiallySelectedWindowID: currentWindowID)
-        if debugCommandTab {
-            if let selected = viewModel.selectedWindow() {
-                print(
-                    "GINMI_COMMAND_TAB activeWindow id=\(selected.id) pid=\(selected.ownerPID) " +
-                        "app=\(selected.ownerName) title=\"\(selected.displayTitle)\" bounds=\(selected.boundsSignature)"
-                )
-            } else {
-                print("GINMI_COMMAND_TAB activeWindow unresolved currentWindowID=\(currentWindowID.map(String.init) ?? "nil")")
-            }
+        commandTabInteracted = false
+        let predictedCurrentWindowID = prefetchedCommandTabCurrentWindowID ?? PerfLogger.measure("panel.command_tab.predict_frontmost") {
+            windowManager.predictedFrontmostWindowID()
         }
-
+        let prefetchedWindows = prefetchedCommandTabWindows.isEmpty ? windowManager.fetchCachedWindows() : prefetchedCommandTabWindows
+        PerfLogger.measure("panel.command_tab.viewmodel_show_snapshot", details: "prefetched_count=\(prefetchedWindows.count)") {
+            viewModel.show(
+                resetQuery: true,
+                mode: .commandTab,
+                initiallySelectedWindowID: predictedCurrentWindowID,
+                prefetchedWindows: prefetchedWindows.isEmpty ? nil : prefetchedWindows
+            )
+        }
+        let presentStage = PerfLogger.start("panel.command_tab.present")
         position(panel)
         NSApp.activate(ignoringOtherApps: true)
         panel.orderFrontRegardless()
         panel.makeKey()
+        PerfLogger.end("panel.command_tab.present", from: presentStage)
+        PerfLogger.end("panel.begin_command_tab_session", from: total)
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.commandTabActive, self.panel?.isVisible == true else { return }
+
+            let reconcileStart = PerfLogger.start("panel.command_tab.reconcile")
+            let currentWindowID = PerfLogger.measure("panel.command_tab.current_frontmost") {
+                self.windowManager.currentFrontmostWindowID()
+            }
+            PerfLogger.measure("panel.command_tab.mark_frontmost") {
+                self.viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
+            }
+            if !self.commandTabInteracted {
+                PerfLogger.measure("panel.command_tab.viewmodel_show_fresh") {
+                    self.viewModel.show(
+                        resetQuery: false,
+                        mode: .commandTab,
+                        initiallySelectedWindowID: currentWindowID
+                    )
+                }
+            }
+
+            if self.debugCommandTab {
+                if let selected = self.viewModel.selectedWindow() {
+                    print(
+                        "GINMI_COMMAND_TAB activeWindow id=\(selected.id) pid=\(selected.ownerPID) " +
+                            "app=\(selected.ownerName) title=\"\(selected.displayTitle)\" bounds=\(selected.boundsSignature)"
+                    )
+                } else {
+                    print("GINMI_COMMAND_TAB activeWindow unresolved currentWindowID=\(currentWindowID.map(String.init) ?? "nil")")
+                }
+            }
+            PerfLogger.end("panel.command_tab.reconcile", from: reconcileStart)
+        }
+        pendingPresentationWorkItem = workItem
+        DispatchQueue.main.async(execute: workItem)
+    }
+
+    func prewarmCommandTabSnapshot() {
+        let total = PerfLogger.start("panel.command_tab.prewarm_snapshot")
+        windowManager.prewarmWindowCache()
+        prefetchedCommandTabCurrentWindowID = PerfLogger.measure("panel.command_tab.prewarm_predict_frontmost") {
+            windowManager.predictedFrontmostWindowID()
+        }
+        prefetchedCommandTabWindows = PerfLogger.measure("panel.command_tab.prewarm_cached_windows") {
+            windowManager.fetchCachedWindows()
+        }
+        PerfLogger.end("panel.command_tab.prewarm_snapshot", from: total, details: "prefetched_count=\(prefetchedCommandTabWindows.count)")
     }
 
     func performQuickCommandTabSwitch() {
@@ -78,21 +144,25 @@ final class SearchPanelController {
 
     func cycleCommandTabSelection(forward: Bool) {
         guard commandTabActive else { return }
+        commandTabInteracted = true
         viewModel.moveSelection(delta: forward ? 1 : -1)
     }
 
     func appendCommandTabQuery(_ text: String) {
         guard commandTabActive else { return }
+        commandTabInteracted = true
         viewModel.appendQuery(text)
     }
 
     func deleteLastCommandTabQueryCharacter() {
         guard commandTabActive else { return }
+        commandTabInteracted = true
         viewModel.deleteLastQueryCharacter()
     }
 
     func quitSelectedCommandTabApp() {
         guard commandTabActive else { return }
+        commandTabInteracted = true
         viewModel.quitSelectedApp()
     }
 
@@ -111,10 +181,14 @@ final class SearchPanelController {
     }
 
     func hidePanel() {
+        cancelPendingPresentationWorkItem()
         panel?.orderOut(nil)
         viewModel.hide()
         fastSearchActive = false
         commandTabActive = false
+        commandTabInteracted = false
+        prefetchedCommandTabWindows = []
+        prefetchedCommandTabCurrentWindowID = nil
     }
 
     func commitFastSearchIfNeeded() {
@@ -136,6 +210,12 @@ final class SearchPanelController {
     func markFrontmostWindowAsUsed() {
         let currentWindowID = windowManager.currentFrontmostWindowID()
         viewModel.markFrontmostWindowAsUsed(windowID: currentWindowID)
+    }
+
+    func prewarmPanel() {
+        if panel == nil {
+            panel = makePanel()
+        }
     }
 
     private func makePanel() -> NSPanel {
@@ -204,6 +284,11 @@ final class SearchPanelController {
                 return event
             }
         }
+    }
+
+    private func cancelPendingPresentationWorkItem() {
+        pendingPresentationWorkItem?.cancel()
+        pendingPresentationWorkItem = nil
     }
 
     private func position(_ panel: NSPanel) {

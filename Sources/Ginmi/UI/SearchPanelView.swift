@@ -5,6 +5,8 @@ struct SearchPanelView: View {
     @ObservedObject var viewModel: SearchPanelViewModel
     @FocusState private var queryFocused: Bool
     @State private var hoveredIndex: Int?
+    @State private var renderStartTime: CFAbsoluteTime?
+    @State private var pendingFirstRowID: String?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -37,6 +39,17 @@ struct SearchPanelView: View {
                                 .onHover { isHovering in
                                     hoveredIndex = isHovering ? index : (hoveredIndex == index ? nil : hoveredIndex)
                                 }
+                                .onAppear {
+                                    if pendingFirstRowID == result.id, let renderStartTime {
+                                        PerfLogger.end(
+                                            "view.first_row_appear",
+                                            from: renderStartTime,
+                                            details: "row_id=\(result.id) results_count=\(viewModel.results.count)"
+                                        )
+                                        pendingFirstRowID = nil
+                                        self.renderStartTime = nil
+                                    }
+                                }
                                 .onTapGesture {
                                     viewModel.selectedIndex = index
                                     viewModel.commitSelection()
@@ -54,6 +67,13 @@ struct SearchPanelView: View {
                     }
                 }
                 .onChange(of: viewModel.results.map(\.id)) { _, _ in
+                    if let firstID = viewModel.results.first?.id {
+                        renderStartTime = PerfLogger.start("view.results_updated", details: "results_count=\(viewModel.results.count)")
+                        pendingFirstRowID = firstID
+                    } else {
+                        renderStartTime = nil
+                        pendingFirstRowID = nil
+                    }
                     guard viewModel.results.indices.contains(viewModel.selectedIndex) else { return }
                     proxy.scrollTo(viewModel.results[viewModel.selectedIndex].id, anchor: .center)
                 }

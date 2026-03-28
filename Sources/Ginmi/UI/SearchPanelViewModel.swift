@@ -11,6 +11,7 @@ final class SearchPanelViewModel: ObservableObject {
 
     @Published var query = "" {
         didSet {
+            guard !suspendAutomaticQuerySearch else { return }
             if presentationMode == .standard {
                 scheduleSearch()
             } else {
@@ -33,6 +34,7 @@ final class SearchPanelViewModel: ObservableObject {
     private let shortcutsStore: SearchShortcutStore
     private let defaults: UserDefaults
     private var searchDebounceTask: Task<Void, Never>?
+    private var suspendAutomaticQuerySearch = false
     private var allWindows: [WindowInfo] = []
     private var presentationMode: PresentationMode = .standard
     private var initialWindowID: Int?
@@ -57,7 +59,16 @@ final class SearchPanelViewModel: ObservableObject {
         self.defaults = defaults
     }
 
-    func show(resetQuery: Bool, mode: PresentationMode, initiallySelectedWindowID: Int? = nil) {
+    func show(
+        resetQuery: Bool,
+        mode: PresentationMode,
+        initiallySelectedWindowID: Int? = nil,
+        prefetchedWindows: [WindowInfo]? = nil
+    ) {
+        let total = PerfLogger.start(
+            "view_model.show",
+            details: "mode=\(mode == .commandTab ? "command_tab" : "standard") prefetched=\(prefetchedWindows != nil)"
+        )
         presentationMode = mode
         initialWindowID = initiallySelectedWindowID
         suppressedPIDs.removeAll()
@@ -65,9 +76,15 @@ final class SearchPanelViewModel: ObservableObject {
         suppressedAppNames.removeAll()
         isVisible = true
         if resetQuery {
+            suspendAutomaticQuerySearch = true
             query = ""
+            suspendAutomaticQuerySearch = false
         }
-        refreshWindows()
+        if let prefetchedWindows {
+            allWindows = prefetchedWindows.filter { !isSuppressed(window: $0) }
+        } else {
+            refreshWindows()
+        }
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             orderWindowsForInitialDisplay(prioritizing: initiallySelectedWindowID)
         }
@@ -81,11 +98,14 @@ final class SearchPanelViewModel: ObservableObject {
         } else {
             selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
         }
+        PerfLogger.end("view_model.show", from: total, details: "results_count=\(results.count)")
     }
 
     func hide() {
         isVisible = false
+        suspendAutomaticQuerySearch = true
         query = ""
+        suspendAutomaticQuerySearch = false
         results = []
         selectedIndex = 0
         suppressedPIDs.removeAll()
@@ -94,14 +114,24 @@ final class SearchPanelViewModel: ObservableObject {
     }
 
     func refreshWindows() {
+        let total = PerfLogger.start("view_model.refresh_windows")
         allWindows = windowManager.fetchAllWindows().filter { !isSuppressed(window: $0) }
+        PerfLogger.end("view_model.refresh_windows", from: total, details: "count=\(allWindows.count)")
     }
 
     func markFrontmostWindowAsUsed(windowID: Int?) {
-        guard let windowID else { return }
+        let total = PerfLogger.start("view_model.mark_frontmost_window_as_used", details: "window_id=\(windowID.map(String.init) ?? "nil")")
+        guard let windowID else {
+            PerfLogger.end("view_model.mark_frontmost_window_as_used", from: total, details: "result=no_window_id")
+            return
+        }
         let windows = windowManager.fetchAllWindows()
-        guard let window = windows.first(where: { $0.id == windowID }) else { return }
+        guard let window = windows.first(where: { $0.id == windowID }) else {
+            PerfLogger.end("view_model.mark_frontmost_window_as_used", from: total, details: "result=window_not_found")
+            return
+        }
         shortcutsStore.touchRecency(for: window.identifier)
+        PerfLogger.end("view_model.mark_frontmost_window_as_used", from: total)
     }
 
     func refreshVisibleResults(initiallySelectedWindowID: Int? = nil) {
@@ -264,11 +294,16 @@ final class SearchPanelViewModel: ObservableObject {
     }
 
     func icon(for result: SearchResultItem) -> NSImage {
+        let start = PerfLogger.start("view_model.icon", details: "kind=\(resultKindLabel(result))")
         switch result.kind {
         case let .window(window):
-            return windowManager.icon(for: window)
+            let icon = windowManager.icon(for: window)
+            PerfLogger.logIfSlow(stage: "view_model.icon", from: start, thresholdMs: 1.5, details: "kind=window app=\(window.ownerName)")
+            return icon
         case let .app(app):
-            return installedAppManager.icon(for: app)
+            let icon = installedAppManager.icon(for: app)
+            PerfLogger.logIfSlow(stage: "view_model.icon", from: start, thresholdMs: 1.5, details: "kind=app name=\(app.name)")
+            return icon
         }
     }
 
@@ -290,11 +325,13 @@ final class SearchPanelViewModel: ObservableObject {
     }
 
     private func runSearch() {
+        let total = PerfLogger.start("view_model.run_search")
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedQuery.isEmpty {
             orderWindowsForInitialDisplay(prioritizing: initialWindowID)
             results = allWindows.map { SearchResultItem(kind: .window($0), score: 0) }
             selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
+            PerfLogger.end("view_model.run_search", from: total, details: "path=empty_query results_count=\(results.count)")
             return
         }
         let recencyWeightEnabled = defaults.object(forKey: "recencyWeightEnabled") as? Bool ?? true
@@ -311,25 +348,29 @@ final class SearchPanelViewModel: ObservableObject {
         let appResults = appResults(query: query, strictContains: false)
         results = windowResults + appResults
         selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
+        PerfLogger.end("view_model.run_search", from: total, details: "path=ranked results_count=\(results.count)")
     }
 
     private func runCommandTabSearch() {
+        let total = PerfLogger.start("view_model.run_command_tab_search")
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             orderWindowsForInitialDisplay(prioritizing: initialWindowID)
         }
         results = rankForCommandTab(query: query)
         selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
 
-        guard debugCommandTab else { return }
-        let titles = results.map {
-            switch $0.kind {
-            case let .window(window):
-                return "id=\(window.id) pid=\(window.ownerPID) \(window.ownerName) :: \(window.displayTitle) bounds=\(window.boundsSignature) emptyTitle=\(window.title.isEmpty)"
-            case let .app(app):
-                return "app=\(app.name) bundle=\(app.bundleIdentifier) path=\(app.url.path)"
+        if debugCommandTab {
+            let titles = results.map {
+                switch $0.kind {
+                case let .window(window):
+                    return "id=\(window.id) pid=\(window.ownerPID) \(window.ownerName) :: \(window.displayTitle) bounds=\(window.boundsSignature) emptyTitle=\(window.title.isEmpty)"
+                case let .app(app):
+                    return "app=\(app.name) bundle=\(app.bundleIdentifier) path=\(app.url.path)"
+                }
             }
+            print("GINMI_COMMAND_TAB query=\"\(query)\" matches=\(titles)")
         }
-        print("GINMI_COMMAND_TAB query=\"\(query)\" matches=\(titles)")
+        PerfLogger.end("view_model.run_command_tab_search", from: total, details: "results_count=\(results.count)")
     }
 
     private func rankForCommandTab(query: String) -> [SearchResultItem] {
@@ -488,5 +529,14 @@ final class SearchPanelViewModel: ObservableObject {
             }
         }
         return true
+    }
+
+    private func resultKindLabel(_ result: SearchResultItem) -> String {
+        switch result.kind {
+        case .window:
+            return "window"
+        case .app:
+            return "app"
+        }
     }
 }

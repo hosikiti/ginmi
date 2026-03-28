@@ -12,6 +12,10 @@ final class InstalledAppManager: InstalledAppManaging {
     private var cachedApps: [InstalledAppInfo] = []
     private var cacheDate: Date?
 
+    func prewarmInstalledApps() {
+        _ = installedApps()
+    }
+
     func installedApps() -> [InstalledAppInfo] {
         if let cacheDate, Date().timeIntervalSince(cacheDate) < 30 {
             return cachedApps
@@ -52,7 +56,10 @@ final class InstalledAppManager: InstalledAppManaging {
     }
 
     func icon(for app: InstalledAppInfo) -> NSImage {
-        NSWorkspace.shared.icon(forFile: app.url.path)
+        let start = PerfLogger.start("installed_app_manager.icon", details: "name=\(app.name)")
+        let icon = NSWorkspace.shared.icon(forFile: app.url.path)
+        PerfLogger.logIfSlow(stage: "installed_app_manager.icon", from: start, thresholdMs: 1.5, details: "name=\(app.name)")
+        return icon
     }
 
     @discardableResult

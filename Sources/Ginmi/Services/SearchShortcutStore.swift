@@ -8,51 +8,54 @@ final class SearchShortcutStore {
     }
 
     private let defaults: UserDefaults
+    private var shortcutsCache: [String: String]
+    private var usageCountCache: [String: Int]
+    private var lastUsedCache: [String: TimeInterval]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.shortcutsCache = defaults.dictionary(forKey: Keys.shortcuts) as? [String: String] ?? [:]
+        self.usageCountCache = defaults.dictionary(forKey: Keys.usageCount) as? [String: Int] ?? [:]
+        self.lastUsedCache = defaults.dictionary(forKey: Keys.lastUsed) as? [String: TimeInterval] ?? [:]
     }
 
     func preferredWindowID(for query: String) -> String? {
         let normalized = normalize(query)
         guard !normalized.isEmpty else { return nil }
-        let map = defaults.dictionary(forKey: Keys.shortcuts) as? [String: String] ?? [:]
-        return map[normalized]
+        return shortcutsCache[normalized]
     }
 
     func remember(query: String, windowIdentifier: String) {
         let normalized = normalize(query)
         guard !normalized.isEmpty else { return }
-        var map = defaults.dictionary(forKey: Keys.shortcuts) as? [String: String] ?? [:]
-        map[normalized] = windowIdentifier
-        defaults.set(map, forKey: Keys.shortcuts)
+        shortcutsCache[normalized] = windowIdentifier
+        defaults.set(shortcutsCache, forKey: Keys.shortcuts)
     }
 
     func incrementUsage(for windowIdentifier: String) {
-        var usage = defaults.dictionary(forKey: Keys.usageCount) as? [String: Int] ?? [:]
-        usage[windowIdentifier, default: 0] += 1
-        defaults.set(usage, forKey: Keys.usageCount)
+        usageCountCache[windowIdentifier, default: 0] += 1
+        defaults.set(usageCountCache, forKey: Keys.usageCount)
 
         touchRecency(for: windowIdentifier)
     }
 
     func touchRecency(for windowIdentifier: String, at date: Date = Date()) {
-        var recency = defaults.dictionary(forKey: Keys.lastUsed) as? [String: TimeInterval] ?? [:]
-        recency[windowIdentifier] = date.timeIntervalSince1970
-        defaults.set(recency, forKey: Keys.lastUsed)
+        lastUsedCache[windowIdentifier] = date.timeIntervalSince1970
+        defaults.set(lastUsedCache, forKey: Keys.lastUsed)
     }
 
     func usageCount(for windowIdentifier: String) -> Int {
-        let usage = defaults.dictionary(forKey: Keys.usageCount) as? [String: Int] ?? [:]
-        return usage[windowIdentifier, default: 0]
+        return usageCountCache[windowIdentifier, default: 0]
     }
 
     func lastUsed(for windowIdentifier: String) -> TimeInterval {
-        let recency = defaults.dictionary(forKey: Keys.lastUsed) as? [String: TimeInterval] ?? [:]
-        return recency[windowIdentifier, default: 0]
+        return lastUsedCache[windowIdentifier, default: 0]
     }
 
     func resetShortcuts() {
+        shortcutsCache.removeAll()
+        usageCountCache.removeAll()
+        lastUsedCache.removeAll()
         defaults.removeObject(forKey: Keys.shortcuts)
         defaults.removeObject(forKey: Keys.usageCount)
         defaults.removeObject(forKey: Keys.lastUsed)

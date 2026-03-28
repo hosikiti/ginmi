@@ -14,11 +14,6 @@ struct GinmiApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private enum DefaultsKey {
-        static let commandTabQuickSwitchThresholdMs = "commandTabQuickSwitchThresholdMs"
-        static let commandTabQuickSwitchThresholdMigrated = "commandTabQuickSwitchThresholdMigrated"
-    }
-
     let shortcutsStore = SearchShortcutStore()
     private let permissionManager = AccessibilityPermissionManager()
     private let windowManager = WindowManager()
@@ -36,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var panelController = SearchPanelController(viewModel: viewModel, windowManager: windowManager)
     private lazy var hotkeyService = HotkeyService(panelController: panelController)
     private lazy var commandTabInterceptor = CommandTabInterceptor(
+        onCommandPressed: { [weak self] in
+            self?.panelController.prewarmCommandTabSnapshot()
+        },
         onSessionStart: { [weak self] in
             self?.panelController.beginCommandTabSession()
         },
@@ -74,8 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.applicationIconImage = GinmiIconFactory.appIcon()
         NSApp.setActivationPolicy(.accessory)
         NSApp.windows.forEach { $0.orderOut(nil) }
-        migrateCommandTabQuickSwitchThresholdIfNeeded()
         windowManager.prewarmWindowCache()
+        installedAppManager.prewarmInstalledApps()
+        panelController.prewarmPanel()
 
         statusBarController.start()
         hotkeyService.start()
@@ -96,19 +95,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if alert.runModal() == .alertFirstButtonReturn {
             permissionManager.requestIfNeeded()
         }
-    }
-
-    private func migrateCommandTabQuickSwitchThresholdIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: DefaultsKey.commandTabQuickSwitchThresholdMigrated) else { return }
-
-        if let configured = defaults.object(forKey: DefaultsKey.commandTabQuickSwitchThresholdMs) as? Int,
-           configured == 100
-        {
-            defaults.set(70, forKey: DefaultsKey.commandTabQuickSwitchThresholdMs)
-        }
-
-        defaults.set(true, forKey: DefaultsKey.commandTabQuickSwitchThresholdMigrated)
     }
 
     private func startObservingWorkspaceChanges() {

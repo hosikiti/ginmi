@@ -389,6 +389,16 @@ private final class FakeWindowManager: WindowManaging {
         windows
     }
 
+    func fetchCachedWindows() -> [WindowInfo] {
+        windows
+    }
+
+    func predictedFrontmostWindowID() -> Int? {
+        windows.first?.id
+    }
+
+    func prewarmWindowCache() {}
+
     func icon(for window: WindowInfo) -> NSImage {
         NSImage(size: NSSize(width: 16, height: 16))
     }
