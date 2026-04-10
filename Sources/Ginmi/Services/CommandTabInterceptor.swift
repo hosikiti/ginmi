@@ -3,8 +3,7 @@ import AppKit
 import Foundation
 
 final class CommandTabInterceptor {
-    private let defaultCommandTabHoldDelayMs = 300
-    private let defaultQuickSwitchEnabled = true
+    private let defaultQuickSwitchEnabled = AppSettings.commandTabQuickSwitchEnabledDefault
     private let onCommandPressed: @MainActor () -> Void
     private let onSessionStart: @MainActor () -> Void
     private let onQuickSwitch: @MainActor () -> Void
@@ -292,12 +291,12 @@ final class CommandTabInterceptor {
     }
 
     private func commandTabHoldDelayMs() -> Int {
-        let configured = UserDefaults.standard.object(forKey: "commandTabHoldDelayMs") as? Int
-        return max(0, configured ?? defaultCommandTabHoldDelayMs)
+        let configured = UserDefaults.standard.object(forKey: AppSettings.commandTabHoldDelayMsKey) as? Int
+        return max(0, configured ?? AppSettings.commandTabHoldDelayMsDefault)
     }
 
     private func isQuickSwitchEnabled() -> Bool {
-        let configured = UserDefaults.standard.object(forKey: "commandTabQuickSwitchEnabled") as? Bool
+        let configured = UserDefaults.standard.object(forKey: AppSettings.commandTabQuickSwitchEnabledKey) as? Bool
         return configured ?? defaultQuickSwitchEnabled
     }
 

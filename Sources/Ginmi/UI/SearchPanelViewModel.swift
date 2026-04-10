@@ -334,7 +334,7 @@ final class SearchPanelViewModel: ObservableObject {
             PerfLogger.end("view_model.run_search", from: total, details: "path=empty_query results_count=\(results.count)")
             return
         }
-        let recencyWeightEnabled = defaults.object(forKey: "recencyWeightEnabled") as? Bool ?? true
+        let recencyWeightEnabled = defaults.object(forKey: AppSettings.recencyWeightEnabledKey) as? Bool ?? AppSettings.recencyWeightEnabledDefault
         let preferredWindowID = shortcutsStore.preferredWindowID(for: query)
         let rankedWindows = searcher.rank(
             windows: allWindows,
@@ -438,7 +438,7 @@ final class SearchPanelViewModel: ObservableObject {
     }
 
     private func appResults(query: String, strictContains: Bool) -> [SearchResultItem] {
-        let isFallbackEnabled = defaults.object(forKey: "searchInstalledAppsFallbackEnabled") as? Bool ?? true
+        let isFallbackEnabled = defaults.object(forKey: AppSettings.searchInstalledAppsFallbackEnabledKey) as? Bool ?? AppSettings.searchInstalledAppsFallbackEnabledDefault
         guard isFallbackEnabled else { return [] }
 
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

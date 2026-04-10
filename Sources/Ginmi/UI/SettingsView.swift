@@ -2,11 +2,11 @@ import KeyboardShortcuts
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("recencyWeightEnabled") private var recencyWeightEnabled = true
-    @AppStorage("searchInstalledAppsFallbackEnabled") private var searchInstalledAppsFallbackEnabled = true
-    @AppStorage("commandTabQuickSwitchEnabled") private var commandTabQuickSwitchEnabled = true
-    @AppStorage("commandTabHoldDelayMs") private var commandTabHoldDelayMs = 300
-    @AppStorage("excludedWindowTitleKeywords") private var excludedWindowTitleKeywords = "autofill"
+    @AppStorage(AppSettings.recencyWeightEnabledKey) private var recencyWeightEnabled = AppSettings.recencyWeightEnabledDefault
+    @AppStorage(AppSettings.searchInstalledAppsFallbackEnabledKey) private var searchInstalledAppsFallbackEnabled = AppSettings.searchInstalledAppsFallbackEnabledDefault
+    @AppStorage(AppSettings.commandTabQuickSwitchEnabledKey) private var commandTabQuickSwitchEnabled = AppSettings.commandTabQuickSwitchEnabledDefault
+    @AppStorage(AppSettings.commandTabHoldDelayMsKey) private var commandTabHoldDelayMs = AppSettings.commandTabHoldDelayMsDefault
+    @AppStorage(AppSettings.excludedWindowTitleKeywordsKey) private var excludedWindowTitleKeywords = AppSettings.excludedWindowTitleKeywordsDefault
 
     let shortcutsStore: SearchShortcutStore
 
@@ -27,7 +27,7 @@ struct SettingsView: View {
                 HStack(alignment: .center, spacing: 12) {
                     Text("Cmd+Tab hold delay")
                     Spacer()
-                    TextField("300", value: $commandTabHoldDelayMs, format: .number)
+                    TextField("\(AppSettings.commandTabHoldDelayMsDefault)", value: $commandTabHoldDelayMs, format: .number)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 72)
                         .multilineTextAlignment(.trailing)
