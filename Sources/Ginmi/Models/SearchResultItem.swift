@@ -54,6 +54,15 @@ struct SearchResultItem: Identifiable {
         }
     }
 
+    var rowTrailingLabel: String? {
+        switch kind {
+        case let .window(window):
+            return window.desktopLabel
+        case .app:
+            return nil
+        }
+    }
+
     var searchableText: String {
         switch kind {
         case let .window(window):

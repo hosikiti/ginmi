@@ -119,6 +119,7 @@ final class WindowManagerTests: XCTestCase {
         title: String,
         bounds: CGRect,
         isOnScreen: Bool = true,
+        workspaceID: Int? = nil,
         bundleID: String? = nil
     ) -> WindowInfo {
         WindowInfo(
@@ -127,6 +128,7 @@ final class WindowManagerTests: XCTestCase {
             ownerName: app,
             ownerBundleID: bundleID ?? "test.\(app.lowercased())",
             title: title,
+            workspaceID: workspaceID,
             layer: 0,
             isOnScreen: isOnScreen,
             alpha: 1.0,

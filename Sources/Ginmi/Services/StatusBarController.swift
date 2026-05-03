@@ -13,10 +13,11 @@ final class StatusBarController: NSObject {
     }
 
     func start() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
             button.image = GinmiIconFactory.statusBarIcon()
             button.imagePosition = .imageOnly
+            button.imageScaling = .scaleProportionallyUpOrDown
             button.toolTip = "Ginmi"
         }
 

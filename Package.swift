@@ -10,15 +10,16 @@ let package = Package(
         .executable(name: "Ginmi", targets: ["Ginmi"])
     ],
     dependencies: [
-        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.3.0"),
         .package(url: "https://github.com/krisk/fuse-swift", from: "1.4.0")
     ],
     targets: [
         .executableTarget(
             name: "Ginmi",
             dependencies: [
-                "KeyboardShortcuts",
                 .product(name: "Fuse", package: "fuse-swift")
+            ],
+            resources: [
+                .process("Resources")
             ]
         ),
         .testTarget(

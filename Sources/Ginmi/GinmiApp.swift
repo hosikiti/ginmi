@@ -29,7 +29,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shortcutsStore: shortcutsStore
     )
     private lazy var panelController = SearchPanelController(viewModel: viewModel, windowManager: windowManager)
-    private lazy var hotkeyService = HotkeyService(panelController: panelController)
     private lazy var commandTabInterceptor = CommandTabInterceptor(
         onCommandPressed: { [weak self] in
             self?.panelController.prewarmCommandTabSnapshot()
@@ -77,7 +76,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController.prewarmPanel()
 
         statusBarController.start()
-        hotkeyService.start()
         commandTabInterceptor.start()
         startObservingWorkspaceChanges()
         ensureAccessibilityPermission()

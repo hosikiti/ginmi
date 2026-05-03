@@ -341,13 +341,29 @@ final class SearchPanelViewModelTests: XCTestCase {
         })
     }
 
-    private func makeWindow(id: Int, app: String, title: String, pid: pid_t = 1) -> WindowInfo {
+    func testWindowResultsExposeDesktopLabelWhenWorkspaceIDIsPresent() {
+        let result = SearchResultItem(
+            kind: .window(makeWindow(id: 1, app: "Arc", title: "Mail", workspaceID: 4)),
+            score: 0
+        )
+
+        XCTAssertEqual(result.rowTrailingLabel, "Desktop 4")
+    }
+
+    private func makeWindow(
+        id: Int,
+        app: String,
+        title: String,
+        pid: pid_t = 1,
+        workspaceID: Int? = nil
+    ) -> WindowInfo {
         WindowInfo(
             id: id,
             ownerPID: pid,
             ownerName: app,
             ownerBundleID: "test.\(app.lowercased())",
             title: title,
+            workspaceID: workspaceID,
             layer: 0,
             isOnScreen: true,
             alpha: 1.0,

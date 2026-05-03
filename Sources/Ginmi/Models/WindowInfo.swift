@@ -7,6 +7,7 @@ struct WindowInfo: Identifiable, Hashable {
     let ownerName: String
     let ownerBundleID: String
     let title: String
+    let workspaceID: Int?
     let layer: Int
     let isOnScreen: Bool
     let alpha: Double
@@ -30,5 +31,10 @@ struct WindowInfo: Identifiable, Hashable {
 
     var identifier: String {
         "\(ownerPID)#\(id)"
+    }
+
+    var desktopLabel: String? {
+        guard let workspaceID, workspaceID > 0 else { return nil }
+        return "Desktop \(workspaceID)"
     }
 }

@@ -3,16 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Ginmi"
-PRODUCT_NAME="${PRODUCT_NAME:-$APP_NAME}"
-VERSION="${VERSION:-0.1.0}"
-BUNDLE_ID="${BUNDLE_ID:-com.keio.ginmi}"
+PRODUCT_NAME="${PRODUCT_NAME:-Ginmi-dev}"
+VERSION="${VERSION:-0.0.0-dev}"
+BUNDLE_ID="${BUNDLE_ID:-com.keio.ginmi.dev}"
 BUILD_DIR="$ROOT_DIR/.build"
 DIST_DIR="$ROOT_DIR/dist"
-STAGING_ROOT="$BUILD_DIR/dmg-staging"
 APP_BUNDLE="$DIST_DIR/$PRODUCT_NAME.app"
-DMG_STAGING_DIR="$STAGING_ROOT/$PRODUCT_NAME"
-DMG_PATH="$DIST_DIR/${PRODUCT_NAME}-${VERSION}.dmg"
-CACHE_ROOT="$BUILD_DIR/packaging-cache"
+CACHE_ROOT="$BUILD_DIR/dev-packaging-cache"
 ICON_SOURCE="$ROOT_DIR/Sources/Ginmi/Resources/ginmi-icon.png"
 ICONSET_DIR="$CACHE_ROOT/Ginmi.iconset"
 APP_ICON_FILE="$APP_NAME.icns"
@@ -26,10 +23,10 @@ export CLANG_MODULE_CACHE_PATH="$CACHE_ROOT/clang-module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$CACHE_ROOT/swiftpm-module-cache"
 export XDG_CACHE_HOME="$CACHE_ROOT/xdg-cache"
 
-echo "==> Building release binary"
-swift build --disable-sandbox -c release --package-path "$ROOT_DIR"
+echo "==> Building debug binary"
+swift build --disable-sandbox --package-path "$ROOT_DIR"
 
-BIN_DIR="$(swift build --disable-sandbox -c release --show-bin-path --package-path "$ROOT_DIR")"
+BIN_DIR="$(swift build --disable-sandbox --show-bin-path --package-path "$ROOT_DIR")"
 EXECUTABLE_PATH="$BIN_DIR/$APP_NAME"
 find "$BIN_DIR" -maxdepth 1 -type d -name '*.bundle' | sort > "$RESOURCE_BUNDLES_FILE"
 
@@ -38,8 +35,8 @@ if [[ ! -x "$EXECUTABLE_PATH" ]]; then
   exit 1
 fi
 
-echo "==> Assembling app bundle"
-rm -rf "$APP_BUNDLE" "$DMG_STAGING_DIR" "$DMG_PATH"
+echo "==> Assembling dev app bundle"
+rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 
 cp "$EXECUTABLE_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
@@ -65,9 +62,12 @@ if [[ -f "$ICON_SOURCE" ]] && command -v sips >/dev/null 2>&1 && command -v icon
   sips -z 512 512 "$ICON_SOURCE" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
   sips -z 1024 1024 "$ICON_SOURCE" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
 
-  iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/$APP_ICON_FILE"
-  ICON_PLIST_ENTRY="  <key>CFBundleIconFile</key>
+  if iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/$APP_ICON_FILE"; then
+    ICON_PLIST_ENTRY="  <key>CFBundleIconFile</key>
   <string>$APP_ICON_FILE</string>"
+  else
+    echo "warning: could not generate .icns; app will still use bundled PNG icons at runtime" >&2
+  fi
 fi
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
@@ -105,23 +105,9 @@ ${ICON_PLIST_ENTRY}
 EOF
 
 if command -v codesign >/dev/null 2>&1; then
-  echo "==> Ad-hoc signing app bundle"
+  echo "==> Ad-hoc signing dev app bundle"
   codesign --force --deep --sign - "$APP_BUNDLE"
 fi
 
-echo "==> Preparing DMG contents"
-mkdir -p "$DMG_STAGING_DIR"
-cp -R "$APP_BUNDLE" "$DMG_STAGING_DIR/"
-ln -sfn /Applications "$DMG_STAGING_DIR/Applications"
-
-echo "==> Creating DMG"
-hdiutil create \
-  -volname "$PRODUCT_NAME" \
-  -srcfolder "$DMG_STAGING_DIR" \
-  -ov \
-  -format UDZO \
-  "$DMG_PATH" >/dev/null
-
 echo
-echo "App bundle: $APP_BUNDLE"
-echo "DMG:        $DMG_PATH"
+echo "Dev app bundle: $APP_BUNDLE"

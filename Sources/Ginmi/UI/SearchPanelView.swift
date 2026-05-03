@@ -32,6 +32,7 @@ struct SearchPanelView: View {
                                     icon: viewModel.icon(for: result),
                                     appName: result.rowAppName,
                                     title: result.rowTitle,
+                                    trailingLabel: result.rowTrailingLabel,
                                     isSelected: index == viewModel.selectedIndex,
                                     isHovered: hoveredIndex == index
                                 )
@@ -126,6 +127,7 @@ private struct SearchResultRow: View {
     let icon: NSImage
     let appName: String
     let title: String
+    let trailingLabel: String?
     let isSelected: Bool
     let isHovered: Bool
 
@@ -141,6 +143,13 @@ private struct SearchResultRow: View {
                 .lineLimit(1)
 
             Spacer()
+
+            if let trailingLabel {
+                Text(trailingLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .lineLimit(1)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

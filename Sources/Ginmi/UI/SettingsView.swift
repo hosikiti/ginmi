@@ -1,4 +1,3 @@
-import KeyboardShortcuts
 import SwiftUI
 
 struct SettingsView: View {
@@ -12,14 +11,6 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            settingsSection("Main Hotkey") {
-                HStack(alignment: .center, spacing: 16) {
-                    Text("Show search panel")
-                    Spacer()
-                    KeyboardShortcuts.Recorder("", name: .openSearch)
-                }
-            }
-
             settingsSection("Behavior") {
                 Toggle("Use recency weighting", isOn: $recencyWeightEnabled)
                 Toggle("Include installed apps in search results", isOn: $searchInstalledAppsFallbackEnabled)

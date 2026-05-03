@@ -4,7 +4,6 @@ Ginmi is a lightweight macOS window switcher focused on the Contexts-style fuzzy
 
 ## Features
 
-- Global hotkey panel (`Control + Space` by default, configurable)
 - `Cmd + Tab` replacement flow for window switching
 - Fuzzy search over app name + window title (Fuse-based ranking)
 - Learned shortcuts: query -> preferred window persistence in `UserDefaults`
@@ -60,7 +59,6 @@ On first run, Ginmi prompts for access. You can also enable manually:
 
 Open the app settings and configure:
 
-- Main global hotkey
 - Recency weighting toggle
 - Include installed apps in search results
 - Reset learned shortcuts

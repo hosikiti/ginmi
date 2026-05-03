@@ -2,13 +2,116 @@ import AppKit
 
 enum GinmiIconFactory {
     static func statusBarIcon() -> NSImage {
-        let image = drawFanIcon(size: NSSize(width: 22, height: 22), strokeWidth: 1.9)
+        if let image = resourceImage(named: "ginmi-tray-icon") {
+            return statusBarTemplateImage(from: image)
+        }
+
+        let fallback = drawFanIcon(size: NSSize(width: 22, height: 22), strokeWidth: 1.9)
+        fallback.isTemplate = true
+        return fallback
+    }
+
+    static func appIcon() -> NSImage {
+        resourceImage(named: "ginmi-icon")
+            ?? drawFanIcon(size: NSSize(width: 256, height: 256), strokeWidth: 14)
+    }
+
+    private static func resourceImage(named name: String) -> NSImage? {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "png") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
+    }
+
+    private static func statusBarTemplateImage(from source: NSImage) -> NSImage {
+        let targetSize = NSSize(width: 22, height: 22)
+        guard
+            let cgImage = source.cgImage(forProposedRect: nil, context: nil, hints: nil),
+            let visibleRect = nonTransparentPixelBounds(in: cgImage)
+        else {
+            source.size = targetSize
+            source.isTemplate = true
+            return source
+        }
+
+        let image = NSImage(size: targetSize)
+        image.lockFocus()
+        defer { image.unlockFocus() }
+
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: targetSize).fill()
+        NSGraphicsContext.current?.imageInterpolation = .high
+
+        let fitScale = min(targetSize.width / visibleRect.width, targetSize.height / visibleRect.height)
+        let drawSize = NSSize(width: visibleRect.width * fitScale, height: visibleRect.height * fitScale)
+        let drawRect = NSRect(
+            x: (targetSize.width - drawSize.width) * 0.5,
+            y: (targetSize.height - drawSize.height) * 0.5,
+            width: drawSize.width,
+            height: drawSize.height
+        )
+        let sourceRect = NSRect(
+            x: visibleRect.minX,
+            y: CGFloat(cgImage.height) - visibleRect.maxY,
+            width: visibleRect.width,
+            height: visibleRect.height
+        )
+
+        source.draw(in: drawRect, from: sourceRect, operation: .sourceOver, fraction: 1)
         image.isTemplate = true
         return image
     }
 
-    static func appIcon() -> NSImage {
-        drawFanIcon(size: NSSize(width: 256, height: 256), strokeWidth: 14)
+    private static func nonTransparentPixelBounds(in image: CGImage) -> CGRect? {
+        let width = image.width
+        let height = image.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+
+        guard
+            let context = CGContext(
+                data: &pixels,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else {
+            return nil
+        }
+
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var minX = width
+        var minY = height
+        var maxX = 0
+        var maxY = 0
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let alpha = pixels[(y * bytesPerRow) + (x * bytesPerPixel) + 3]
+                guard alpha > 8 else { continue }
+
+                minX = min(minX, x)
+                minY = min(minY, y)
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+            }
+        }
+
+        guard minX <= maxX, minY <= maxY else {
+            return nil
+        }
+
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: maxX - minX + 1,
+            height: maxY - minY + 1
+        )
     }
 
     private static func drawFanIcon(size: NSSize, strokeWidth: CGFloat) -> NSImage {

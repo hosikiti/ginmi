@@ -18,6 +18,10 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
         static let excludedWindowTitleKeywords = "excludedWindowTitleKeywords"
     }
 
+    private enum CGWindowDictionaryKey {
+        static let workspace = "kCGWindowWorkspace"
+    }
+
     private struct AXTitleCacheEntry {
         let titles: [String]
         let date: Date
@@ -169,6 +173,7 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
 
             let onScreen = info[kCGWindowIsOnscreen as String] as? Bool ?? false
             let alpha = info[kCGWindowAlpha as String] as? Double ?? 1
+            let workspaceID = (info[CGWindowDictionaryKey.workspace] as? NSNumber)?.intValue
             guard let bounds = boundsRect(from: info[kCGWindowBounds as String]) else {
                 debugDrop(windowID: windowID, ownerName: ownerName, reason: "missing-bounds", info: info)
                 continue
@@ -239,6 +244,7 @@ final class WindowManager: WindowManaging, @unchecked Sendable {
                 ownerName: ownerName,
                 ownerBundleID: bundleID,
                 title: title,
+                workspaceID: workspaceID,
                 layer: layer,
                 isOnScreen: onScreen,
                 alpha: alpha,
